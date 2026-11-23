@@ -94,6 +94,52 @@ class FortiGateParser(
                 return f"{ip_m.group(1)}/{ip_m.group(2)}"
         return "Not configured"
 
+    def get_management_ip(self) -> dict[str, str]:
+        """Resolve dedicated management IP (HA mgmt reservation, dedicated-to management, or mgmt* interface)."""
+        raw_ifaces = self._parse_raw_interfaces({})
+        ha = self.get_ha_config()
+        if ha.get("enabled") and ha.get("ha_mgmt_status") == "enable":
+            ha_ips: list[str] = []
+            ha_names: list[str] = []
+            for m in ha.get("ha_mgmt_interfaces") or []:
+                iname = m.get("interface", "")
+                info = raw_ifaces.get(iname)
+                if info and info.get("Status", "Enable").lower() != "disable":
+                    ip_val = info.get("IP/Netmask", "-")
+                    if ip_val and ip_val != "-":
+                        ha_ips.append(ip_val)
+                        ha_names.append(iname)
+            if ha_ips:
+                return {"ip": ", ".join(ha_ips), "sub": f"HA Mgmt ({', '.join(ha_names)})"}
+
+        block = self._extract_block("system interface")
+        if block:
+            entries = re.findall(
+                r'^\s*edit "([^"]+)"(.*?)^\s*next', block, re.DOTALL | re.MULTILINE
+            )
+            dedicated_match: dict[str, str] | None = None
+            named_match: dict[str, str] | None = None
+            for name, body in entries:
+                status_m = re.search(r"set status (enable|disable)", body)
+                if status_m and status_m.group(1).lower() == "disable":
+                    continue
+                ip_m = re.search(r"set ip ([\d\.]+) ([\d\.]+)", body)
+                if not ip_m:
+                    continue
+                ip_val = f"{ip_m.group(1)}/{ip_m.group(2)}"
+                if re.search(r"set dedicated-to management\b", body, re.IGNORECASE):
+                    dedicated_match = {"ip": ip_val, "sub": f"Dedicated ({name})"}
+                    break
+                if named_match is None and re.match(r"mgmt\d*$", name, re.IGNORECASE):
+                    named_match = {"ip": ip_val, "sub": f"Interface ({name})"}
+
+            if dedicated_match is not None:
+                return dedicated_match
+            if named_match is not None:
+                return named_match
+
+        return {"ip": "Not configured", "sub": ""}
+
     def get_ha_config(self) -> dict:
         body = self._extract_block("system ha")
         if not body:

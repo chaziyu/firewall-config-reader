@@ -20,7 +20,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-APP_VERSION = "2.3.2"
+APP_VERSION = "2.4.0"
 GITHUB_REPO = os.environ.get("FW_GITHUB_REPO", "chaziyu/firewall-config-reader")
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 ALLOWED_DOWNLOAD_HOSTS = {"github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"}

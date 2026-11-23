@@ -2,7 +2,7 @@
 ; Builds a per-user (or optional all-users) Windows installer from the PyInstaller --onedir output.
 
 #ifndef AppVersion
-  #define AppVersion "2.3.2"
+  #define AppVersion "2.4.0"
 #endif
 
 #define AppName "Firewall Config Reader"

@@ -12,6 +12,11 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from backend.exposure_check import (
+    build_exposure_overview_blocks,
+    find_paloalto_public_mgmt_exposure,
+)
+
 
 def _table_block(
     rows: list[dict[str, Any]] | None,
@@ -81,7 +86,11 @@ def _policy_block(rows: list[dict[str, Any]] | None, key: str, label: str) -> di
 
 
 # ── 1. Dashboard ─────────────────────────────────────────────────────────────
-def build_dashboard(parser: Any) -> dict[str, Any]:
+def build_dashboard(
+    parser: Any,
+    network_parser: Any = None,
+    device_parser: Any = None,
+) -> dict[str, Any]:
     info = parser.get_system_info()
     ha = parser.get_ha_info()
 
@@ -90,6 +99,13 @@ def build_dashboard(parser: Any) -> dict[str, Any]:
     timezone = str(info.get("timezone", "—"))
     adv_routing = str(info.get("adv_routing", "Off"))
     dup_ip = str(info.get("dup_ip", "Disable"))
+
+    exposure_findings = find_paloalto_public_mgmt_exposure(
+        network_parser,
+        device_parser=device_parser,
+        dashboard_parser=parser,
+    )
+    exposure_badge, exposure_card = build_exposure_overview_blocks(exposure_findings)
 
     blocks: list[dict[str, Any]] = [
         {
@@ -106,8 +122,14 @@ def build_dashboard(parser: Any) -> dict[str, Any]:
                     "text": f"Duplicate IP: {dup_ip}",
                     "variant": "info" if dup_ip == "Enable" else "muted",
                 },
+                exposure_badge,
             ],
         },
+    ]
+    if exposure_card is not None:
+        blocks.append(exposure_card)
+
+    blocks.extend([
         {"type": "section_header", "title": "Management & Network Identity"},
         {
             "type": "kv_grid",
@@ -123,7 +145,7 @@ def build_dashboard(parser: Any) -> dict[str, Any]:
             ],
         },
         {"type": "section_header", "title": "High Availability"},
-    ]
+    ])
 
     if not ha.get("enabled"):
         blocks.append(
@@ -1010,7 +1032,11 @@ def build_device(parser: Any) -> dict[str, Any]:
 
 def build_paloalto_section(section: str, parsers: dict[str, Any]) -> dict[str, Any]:
     builders = {
-        "Dashboard": lambda: build_dashboard(parsers["Dashboard"]),
+        "Dashboard": lambda: build_dashboard(
+            parsers["Dashboard"],
+            network_parser=parsers.get("Network"),
+            device_parser=parsers.get("Device"),
+        ),
         "Policies": lambda: build_policies(parsers["Policies"]),
         "Objects": lambda: build_objects(parsers["Objects"]),
         "Network": lambda: build_network(parsers["Network"]),

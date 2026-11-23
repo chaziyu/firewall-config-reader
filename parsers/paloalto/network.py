@@ -83,16 +83,23 @@ class PaloNetworkParser(PaloAltoParser):
                 ips = [
                     x.get("name", "") for x in (l3.findall("ip/entry") if l3 is not None else [])
                 ]
+                mgmt_profile = (
+                    l3.findtext("interface-management-profile", "")
+                    if l3 is not None
+                    else ""
+                ) or e.findtext("interface-management-profile", "-")
+                link_state = (e.findtext("link-state", "") or "").strip().lower()
                 rows.append(
                     {
                         "Interface": name,
                         "Type": itype,
-                        "Mgmt Profile": e.findtext("interface-management-profile", "-"),
+                        "Mgmt Profile": mgmt_profile,
                         "IP Address": ", ".join(ips) if ips else "none",
                         "Virtual Router": vr_map.get(name, "none"),
                         "Tag": e.findtext("tag", "-"),
                         "Zone": zone_map.get(name, "-"),
                         "Comment": e.findtext("comment", "-"),
+                        "_disabled": link_state == "down",
                     }
                 )
         # AE + sub-interfaces
@@ -102,13 +109,18 @@ class PaloNetworkParser(PaloAltoParser):
                 name = ae.get("name", "")
                 l3 = ae.find("layer3")
                 ips = [
-                    x.get("name", "") for x in (l3.findall("ip/entry") if l3 else [])
+                    x.get("name", "") for x in (l3.findall("ip/entry") if l3 is not None else [])
                 ]
+                ae_mgmt_profile = (
+                    l3.findtext("interface-management-profile", "")
+                    if l3 is not None
+                    else ""
+                ) or ae.findtext("interface-management-profile", "-")
                 rows.append(
                     {
                         "Interface": name,
                         "Type": "Aggregate (Parent)",
-                        "Mgmt Profile": "-",
+                        "Mgmt Profile": ae_mgmt_profile,
                         "IP Address": ", ".join(ips) if ips else "none",
                         "Virtual Router": vr_map.get(name, "none"),
                         "Tag": "-",
@@ -116,7 +128,7 @@ class PaloNetworkParser(PaloAltoParser):
                         "Comment": "-",
                     }
                 )
-                for u in (ae.findall("layer3/units/entry") if l3 else []):
+                for u in (ae.findall("layer3/units/entry") if l3 is not None else []):
                     uname = u.get("name", "")
                     u_ips = [x.get("name", "") for x in u.findall("ip/entry")]
                     rows.append(

@@ -17,6 +17,11 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from backend.exposure_check import (
+    build_exposure_overview_blocks,
+    find_fortigate_public_mgmt_exposure,
+)
+
 _INTERNAL_ADDR_KEYS = {
     "network_obj",
     "network",
@@ -90,6 +95,13 @@ def build_summary(parser: Any) -> dict[str, Any]:
             return default
 
     wan_ip = _safe(parser.get_wan_ip)
+    mgmt_info = _safe(parser.get_management_ip, {"ip": "Not configured", "sub": ""})
+    if not isinstance(mgmt_info, dict):
+        mgmt_info = {"ip": str(mgmt_info), "sub": ""}
+    sys_settings = _safe(parser.parse_system_settings, {}) or {}
+    http_port = str(sys_settings.get("http_port") or "80")
+    https_port = str(sys_settings.get("https_port") or "443")
+    ssh_port = str(sys_settings.get("ssh_port") or "22")
     serial = _safe(parser.get_serial_number)
     firmware = _safe(parser.get_firmware_version)
     ha = _safe(parser.get_ha_config, {"enabled": False})
@@ -99,27 +111,40 @@ def build_summary(parser: Any) -> dict[str, Any]:
         if ha.get("enabled")
         else {"text": "Standalone", "variant": "muted"}
     )
+    exposure_findings = find_fortigate_public_mgmt_exposure(parser)
+    exposure_badge, exposure_card = build_exposure_overview_blocks(exposure_findings)
 
-    blocks = [
+    blocks: list[dict[str, Any]] = [
         {
             "type": "hero",
             "eyebrow": "FortiGate Appliance",
             "title": str(hostname),
             "subtitle": f"Firmware {firmware} · S/N {serial}",
-            "badges": [ha_badge],
+            "badges": [ha_badge, exposure_badge],
         },
+    ]
+    if exposure_card is not None:
+        blocks.append(exposure_card)
+
+    mgmt_item: dict[str, Any] = {"label": "Management IP", "value": mgmt_info.get("ip", "Not configured")}
+    if mgmt_info.get("sub"):
+        mgmt_item["sub"] = mgmt_info["sub"]
+
+    blocks.extend([
         {"type": "section_header", "title": "System Overview"},
         {
             "type": "kv_grid",
             "items": [
                 {"label": "Hostname", "value": hostname},
+                mgmt_item,
                 {"label": "WAN IP / Netmask", "value": wan_ip},
+                {"label": "Admin Ports", "value": f"HTTPS {https_port} · SSH {ssh_port}", "sub": f"HTTP {http_port}"},
                 {"label": "Primary DNS", "value": dns_primary, "sub": f"Secondary: {dns_secondary}"},
                 {"label": "Serial Number", "value": serial},
                 {"label": "Firmware Version", "value": firmware},
             ],
         },
-    ]
+    ])
     return {"section": "Summary", "blocks": blocks}
 
 
