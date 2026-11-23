@@ -2,7 +2,10 @@
 
 **Offline-first firewall configuration analyzer, policy simulator, Tech Support File (TSF) explorer, and AI config assistant for Palo Alto Networks (PAN-OS) and Fortinet FortiGate (FortiOS).**
 
-Built with **FastAPI**, **Jinja2**, and **Vanilla JS/CSS** — with one-click local browser startup and standalone Windows desktop packaging via **PyInstaller + pywebview + Inno Setup**.
+Built with **FastAPI**, **Jinja2**, and **Vanilla JS/CSS** — with instant browser access, one-click local startup, and standalone Windows desktop packaging via **PyInstaller + pywebview + Inno Setup**.
+
+🌐 **Live Web App:** **[Firewall Config Reader](https://firewall-config-reader-e7hs.onrender.com/)**  
+💻 **Windows Desktop App:** **[Download Latest Installer (`.exe`) & Portable ZIP](https://github.com/chaziyu/firewall-config-reader/releases/latest)**
 
 ---
 
@@ -123,14 +126,25 @@ firewall-config-reader/
 
 ## Quick Start
 
-### Option 1: One-Click Local Run (Windows)
+### Option 1: Instant Online Web App (No Installation Required)
+Open **[Firewall Config Reader](https://firewall-config-reader-e7hs.onrender.com/)** directly in your browser.
+* Uploaded `.xml` and `.conf` files are sanitized (`[REDACTED]` credentials) and held strictly in ephemeral compressed RAM for your session only.
+* To use the AI Config Assistant online, click the **🔑 key icon** in the chatbox to enter your own Gemini API key for your session.
+* *(Tip: For large 100–500 MB TSF `.zip` archives or 100% air-gapped offline auditing, use the Windows Desktop App or Local Run below).*
+
+### Option 2: Windows Desktop Installer (`.exe`)
+Download and run **`FirewallConfigReader-Setup-<version>.exe`** from **[GitHub Releases](https://github.com/chaziyu/firewall-config-reader/releases/latest)**.
+* Runs 100% locally in a native desktop window with zero Python setup required.
+* Includes a built-in **Auto-Update Checker** in the sidebar footer to download, verify (SHA-256), and install new releases in one click.
+
+### Option 3: One-Click Local Run from Source (Windows)
 Double-click **`Start Local.bat`** (or run it from a terminal):
 ```bat
 "Start Local.bat"
 ```
 This script automatically creates `.venv` (if missing), installs `requirements.txt`, starts Uvicorn on `http://127.0.0.1:8501/`, and opens your default browser once `/health` reports ready.
 
-### Option 2: Manual Python / Cross-Platform Run
+### Option 4: Manual Python / Cross-Platform Run
 Requires **Python 3.11+**:
 ```bash
 python -m venv .venv
@@ -144,7 +158,7 @@ python server.py
 ```
 Open **`http://127.0.0.1:8501/`** in your browser.
 
-### Option 3: Build Standalone Windows Desktop App & Installer
+### Option 5: Build Standalone Windows Desktop App & Installer Locally
 Double-click **`Build Desktop App.bat`**:
 * Produces a standalone `--onedir` desktop bundle at `dist\FirewallConfigReader\FirewallConfigReader.exe`.
 * If **Inno Setup 6** (`ISCC.exe`) is installed (`winget install JRSoftware.InnoSetup`), it also compiles a redistributable Windows installer at `dist\FirewallConfigReader-Setup-<version>.exe`.
