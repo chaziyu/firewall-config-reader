@@ -15,9 +15,9 @@ on:
   workflow_dispatch:
     inputs:
       app_version:
-        description: "Version number for manual build (e.g. 2.2.1)"
+        description: "Version number for manual build (e.g. 2.3.0)"
         required: false
-        default: "2.2.1"
+        default: "2.3.0"
 
 permissions:
   contents: write

@@ -3,7 +3,7 @@ setlocal EnableExtensions
 cd /d "%~dp0"
 
 set "PYTHON=%~dp0.venv\Scripts\python.exe"
-if "%APP_VERSION%"=="" set "APP_VERSION=2.2.1"
+if "%APP_VERSION%"=="" set "APP_VERSION=2.3.0"
 
 if not exist "%PYTHON%" (
     echo Creating the Python environment...

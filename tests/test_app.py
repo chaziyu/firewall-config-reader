@@ -481,6 +481,48 @@ def test_auto_update_check_and_sha256_verification(monkeypatch):
     assert pub_install.status_code == 403
 
 
+def test_excel_export_for_paloalto_and_fortigate():
+    import io
+    from openpyxl import load_workbook
+
+    # 1. Palo Alto
+    pa_client = TestClient(create_app())
+    assert pa_client.post("/api/upload", files={"file": ("pa_sample.xml", SAMPLE_PA_XML, "text/xml")}).status_code == 200
+
+    ws_html = pa_client.get("/workspace").text
+    assert 'id="fw-export-excel-btn"' in ws_html
+    assert ws_html.index('id="fw-export-excel-btn"') < ws_html.index("data-theme-toggle")
+
+    pa_res = pa_client.get("/api/export/excel")
+    assert pa_res.status_code == 200
+    assert "pa_sample_export.xlsx" in pa_res.headers.get("content-disposition", "")
+    wb_pa = load_workbook(io.BytesIO(pa_res.content))
+    assert wb_pa.sheetnames == ["Dashboard", "Policies", "Objects", "Network", "Device"]
+    assert any(
+        cell.fill and cell.fill.fill_type == "solid"
+        for row in wb_pa["Policies"].iter_rows()
+        for cell in row
+    )
+    assert (wb_pa["Policies"].column_dimensions["A"].width or 0) >= 12
+
+    # 2. FortiGate
+    fg_client = TestClient(create_app())
+    assert fg_client.post("/api/upload", files={"file": ("fg_sample.conf", SAMPLE_FG_CONF, "text/plain")}).status_code == 200
+
+    fg_res = fg_client.get("/api/export/excel")
+    assert fg_res.status_code == 200
+    assert "fg_sample_export.xlsx" in fg_res.headers.get("content-disposition", "")
+    wb_fg = load_workbook(io.BytesIO(fg_res.content))
+    assert len(wb_fg.sheetnames) == 10
+    assert wb_fg.sheetnames[0] == "Summary"
+    assert any(
+        cell.fill and cell.fill.fill_type == "solid"
+        for row in wb_fg["Policy & Objects"].iter_rows()
+        for cell in row
+    )
+
+
+
 
 
 

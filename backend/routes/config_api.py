@@ -5,7 +5,11 @@ JSON API routes for Palo Alto and FortiGate sections + Policy Match / Policy Loo
 
 from __future__ import annotations
 
+from pathlib import PurePath
+import re
+
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from backend.auth import is_authenticated
@@ -161,3 +165,31 @@ async def fg_policy_lookup(body: FgPolicyLookupRequest, request: Request):
             },
         ],
     }
+
+
+@router.get("/export/excel")
+def export_config_excel(request: Request):
+    from backend.excel_export import export_fortigate_excel, export_paloalto_excel
+
+    sess = store.get_existing(request)
+    if not is_authenticated(sess):
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    if sess is None or not sess.raw_content or sess.vendor not in ("Palo Alto", "FortiGate"):
+        raise HTTPException(status_code=404, detail="No active firewall configuration loaded.")
+
+    if sess.vendor == "Palo Alto":
+        parsers = store.get_palo_alto_parsers(sess.content_hash or "", sess.raw_content)
+        xlsx_bytes = export_paloalto_excel(parsers)
+    else:
+        fg = store.get_fortigate_parser(sess.content_hash or "", sess.raw_content)
+        xlsx_bytes = export_fortigate_excel(fg)
+
+    stem = PurePath(sess.filename or "firewall_config").stem
+    safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("_") or "firewall_config"
+    out_name = f"{safe_stem}_export.xlsx"
+
+    return Response(
+        content=xlsx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{out_name}"'},
+    )

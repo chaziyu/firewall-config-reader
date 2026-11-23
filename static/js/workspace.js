@@ -549,6 +549,38 @@
       });
     }
 
+    const exportExcelBtn = document.getElementById("fw-export-excel-btn");
+    if (exportExcelBtn) {
+      exportExcelBtn.addEventListener("click", async () => {
+        const origText = exportExcelBtn.textContent;
+        exportExcelBtn.disabled = true;
+        exportExcelBtn.textContent = "Exporting...";
+        try {
+          const res = await fetch("/api/export/excel");
+          if (!res.ok) {
+            throw new Error(`Export failed (${res.status})`);
+          }
+          const blob = await res.blob();
+          const disp = res.headers.get("Content-Disposition") || "";
+          const match = disp.match(/filename="?([^";]+)"?/i);
+          const filename = match ? match[1] : "firewall_config_export.xlsx";
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+        } catch (err) {
+          alert(err && err.message ? err.message : "Failed to export Excel file.");
+        } finally {
+          exportExcelBtn.disabled = false;
+          exportExcelBtn.textContent = origText;
+        }
+      });
+    }
+
     const first = navButtons[0].dataset.section;
     if (first) loadSection(first);
   });

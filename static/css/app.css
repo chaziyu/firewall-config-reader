@@ -110,33 +110,6 @@ a {
   letter-spacing: -0.01em;
 }
 
-.fw-session-pill {
-  background: var(--fw-surface-2);
-  border: 1px solid var(--fw-border);
-  border-radius: 8px;
-  padding: 8px 10px;
-  margin-bottom: 14px;
-  font-size: 12px;
-}
-
-.fw-session-vendor {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: 600;
-  color: var(--fw-text);
-}
-
-.fw-session-file {
-  font-family: var(--fw-font-mono);
-  font-size: 11px;
-  color: var(--fw-muted);
-  margin-top: 3px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .fw-nav-label {
   font-size: 10.5px;
   font-weight: 600;
@@ -424,15 +397,6 @@ a {
 .fw-badge-warn   { color: var(--fw-warn); background: var(--fw-warn-soft); border-color: rgba(210, 153, 34, 0.42); }
 .fw-badge-purple { color: var(--fw-purple); background: var(--fw-purple-soft); border-color: rgba(192, 132, 252, 0.38); }
 .fw-badge-muted  { color: var(--fw-muted); background: var(--fw-surface-2); border-color: var(--fw-border); }
-
-.status-dot-live {
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--fw-allow);
-  flex-shrink: 0;
-}
 
 /* ── Section Headers, Cards, KV Grids ─────────────────────────── */
 .fw-section-header {
