@@ -1,0 +1,139 @@
+name: CI & Windows Installer Release
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      app_version:
+        description: "Version number for manual build (e.g. 2.2.0)"
+        required: false
+        default: "2.2.0"
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Run Pytest & Startup Checks
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest httpx
+
+      - name: Verify startup module imports
+        run: |
+          python -c "import fastapi, uvicorn, jinja2, multipart, parsers.fortigate, parsers.paloalto, tsf.extractor, server; print('Startup import check OK')"
+
+      - name: Run pytest suite
+        run: |
+          python -m pytest -v -W error::DeprecationWarning:parsers.*
+
+  build-windows:
+    name: Build Windows Installer & Portable Bundle
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Determine APP_VERSION
+        id: ver
+        shell: pwsh
+        run: |
+          if ("${{ github.ref }}" -like "refs/tags/v*") {
+            $ver = "${{ github.ref_name }}".TrimStart("v")
+          } elseif ("${{ inputs.app_version }}" -ne "") {
+            $ver = "${{ inputs.app_version }}".TrimStart("v")
+          } else {
+            $ver = "2.2.0"
+          }
+          Write-Host "Resolved APP_VERSION=$ver"
+          "APP_VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Create .venv and build via Build Desktop App.bat
+        shell: cmd
+        run: |
+          python -m venv .venv
+          call "Build Desktop App.bat"
+
+      - name: Smoke-test packaged executable (--help)
+        shell: pwsh
+        run: |
+          $exe = "dist\FirewallConfigReader\FirewallConfigReader.exe"
+          if (-not (Test-Path $exe)) {
+            Write-Error "Packaged executable not found at $exe"
+            exit 1
+          }
+          & $exe --help
+
+      - name: Create Portable ZIP & SHA256SUMS.txt
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.ver.outputs.version }}"
+          $portableZip = "dist\FirewallConfigReader-Portable-$ver-win64.zip"
+          $installerExe = "dist\FirewallConfigReader-Setup-$ver.exe"
+
+          if (-not (Test-Path $installerExe)) {
+            Write-Error "Installer not found at $installerExe"
+            exit 1
+          }
+
+          Compress-Archive -Path "dist\FirewallConfigReader\*" -DestinationPath $portableZip -Force
+
+          $hashes = @()
+          foreach ($file in @($installerExe, $portableZip)) {
+            $h = (Get-FileHash -Path $file -Algorithm SHA256).Hash.ToLower()
+            $name = Split-Path $file -Leaf
+            $hashes += "$h  $name"
+          }
+          $hashes | Set-Content -Path "dist\SHA256SUMS.txt" -Encoding UTF8
+          Get-Content "dist\SHA256SUMS.txt"
+
+      - name: Upload workflow build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: FirewallConfigReader-${{ steps.ver.outputs.version }}-win64
+          path: |
+            dist/FirewallConfigReader-Setup-${{ steps.ver.outputs.version }}.exe
+            dist/FirewallConfigReader-Portable-${{ steps.ver.outputs.version }}-win64.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Publish GitHub Release (on tag push)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Firewall Config Reader v${{ steps.ver.outputs.version }}"
+          generate_release_notes: true
+          files: |
+            dist/FirewallConfigReader-Setup-${{ steps.ver.outputs.version }}.exe
+            dist/FirewallConfigReader-Portable-${{ steps.ver.outputs.version }}-win64.zip
+            dist/SHA256SUMS.txt

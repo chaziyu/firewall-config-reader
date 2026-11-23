@@ -19,6 +19,7 @@ from __future__ import annotations
 import io
 import os
 import shutil
+import tempfile
 import uuid
 import zipfile
 from dataclasses import dataclass, field
@@ -27,7 +28,9 @@ from typing import Callable
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-SESSIONS_ROOT = Path("/tmp/tsf_sessions")
+SESSIONS_ROOT = Path(
+    os.environ.get("TSF_SESSIONS_DIR") or Path(tempfile.gettempdir()) / "tsf_sessions"
+)
 
 MAX_DEPTH = 20
 MAX_EXTRACT_BYTES = 5 * 1024**3  # 5 GB total extracted size guard

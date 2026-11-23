@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}Firewall Config Reader{% endblock %}
+{% block body %}
+<div class="fw-shell">
+  <aside class="fw-sidebar" id="fw-sidebar">
+    <div class="fw-brand">
+      <img src="/assets/app_logo.png" alt="Logo" class="fw-brand-logo" />
+      <span class="fw-brand-title">Firewall Config Reader</span>
+    </div>
+
+    <div class="fw-sidebar-footer">
+      <hr class="fw-sidebar-divider" />
+      <div class="fw-sidebar-version">v2.2.0 · FastAPI Local</div>
+    </div>
+  </aside>
+
+  <main class="fw-main">
+    <div class="fw-landing-header">
+      <div style="display:flex;align-items:flex-start;gap:14px;">
+        <button type="button" class="fw-btn" id="fw-sidebar-toggle" title="Toggle sidebar">☰</button>
+        <div>
+          <div class="fw-landing-eyebrow">Local Firewall Analysis Console</div>
+          <h1 class="fw-landing-title">Inspect firewall configurations offline</h1>
+          <p class="fw-landing-desc">
+            Drop a Palo Alto PAN-OS XML backup, FortiGate FortiOS config, or Technical Support File
+            archive to audit policies, objects, interfaces, VPN tunnels, and system logs locally.
+          </p>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-shrink:0;">
+        <button type="button" class="fw-btn fw-btn-sm" data-theme-toggle>☀ Light</button>
+      </div>
+    </div>
+
+    <div class="fw-vendor-grid">
+      <div class="vendor-card">
+        <div class="vendor-card-head">
+          <div>
+            <h3>Palo Alto Networks</h3>
+            <p>PAN-OS XML running or backup configs</p>
+          </div>
+          {% if has_pa_logo %}
+          <img src="/assets/paloalto_logo.png" alt="Palo Alto" class="vendor-card-logo" />
+          {% else %}
+          <span class="fw-badge fw-badge-info">PAN-OS</span>
+          {% endif %}
+        </div>
+        <div class="vendor-card-meta">
+          <span class="fw-badge fw-badge-info">PAN-OS 10.x+</span>
+          <span class="fw-badge fw-badge-muted">.xml</span>
+          <span class="fw-badge fw-badge-muted">Max 50 MB</span>
+        </div>
+      </div>
+
+      <div class="vendor-card">
+        <div class="vendor-card-head">
+          <div>
+            <h3>FortiGate</h3>
+            <p>FortiOS CLI configuration exports</p>
+          </div>
+          {% if has_fg_logo %}
+          <img src="/assets/fortigate_logo.png" alt="FortiGate" class="vendor-card-logo" />
+          {% else %}
+          <span class="fw-badge fw-badge-warn">FortiOS</span>
+          {% endif %}
+        </div>
+        <div class="vendor-card-meta">
+          <span class="fw-badge fw-badge-warn">FortiOS 6.x / 7.x</span>
+          <span class="fw-badge fw-badge-muted">.conf · .txt</span>
+          <span class="fw-badge fw-badge-muted">Max 50 MB</span>
+        </div>
+      </div>
+
+      <div class="vendor-card">
+        <div class="vendor-card-head">
+          <div>
+            <h3>Palo Alto TSF</h3>
+            <p>Technical Support File log archives</p>
+          </div>
+          <span class="fw-badge fw-badge-info">TSF</span>
+        </div>
+        <div class="vendor-card-meta">
+          <span class="fw-badge fw-badge-info">Tree &amp; Full-Text Search</span>
+          <span class="fw-badge fw-badge-muted">.zip</span>
+          <span class="fw-badge fw-badge-muted">Max 500 MB</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="fw-dropzone" id="fw-dropzone">
+      <div class="fw-dropzone-title">
+        Drop configuration file (<code>.xml</code>, <code>.conf</code>, <code>.txt</code>) or TSF archive (<code>.zip</code>)
+      </div>
+      <div class="fw-dropzone-sub">
+        Config files up to 50 MB · TSF packages up to 500 MB
+      </div>
+      <button type="button" class="fw-btn fw-btn-primary" id="fw-browse-btn">Browse files</button>
+      <input
+        type="file"
+        id="fw-file-input"
+        accept=".xml,.conf,.txt,.zip"
+        style="display:none"
+      />
+    </div>
+
+    <div id="fw-upload-progress" class="fw-progress-wrap" style="display:none">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span class="fw-spinner"></span>
+        <span id="fw-progress-text" style="font-size:13px;">Uploading...</span>
+      </div>
+      <div class="fw-progress-track">
+        <div class="fw-progress-bar" id="fw-progress-bar"></div>
+      </div>
+    </div>
+
+    <div id="fw-upload-error" class="fw-alert fw-alert-error" style="display:none"></div>
+
+    <p class="fw-caption" style="margin-top:10px;">
+      Files are processed locally in memory or temporary session storage and cleared when the session ends.
+    </p>
+  </main>
+</div>
+{% endblock %}
+{% block extra_js %}
+<script src="/static/js/upload.js"></script>
+{% endblock %}

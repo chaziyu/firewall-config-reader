@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}Firewall Config Reader{% endblock %}</title>
+  <link rel="icon" type="image/png" href="/assets/app_logo.png" />
+  <link rel="stylesheet" href="/static/css/theme.css" />
+  <link rel="stylesheet" href="/static/css/app.css" />
+  {% block extra_css %}{% endblock %}
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("fw_theme");
+        if (t !== "light" && t !== "dark") {
+          t = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        }
+        document.documentElement.setAttribute("data-theme", t);
+        var z = parseInt(localStorage.getItem("fw_zoom_pct") || "100", 10);
+        var factor = (!isNaN(z) && z >= 80 && z <= 130) ? (z * 0.92) / 100 : 0.92;
+        document.documentElement.style.zoom = factor;
+        document.documentElement.style.setProperty("--fw-zoom-factor", String(factor));
+      } catch (e) {
+        document.documentElement.style.zoom = 0.92;
+        document.documentElement.style.setProperty("--fw-zoom-factor", "0.92");
+      }
+    })();
+  </script>
+</head>
+<body>
+  {% block body %}{% endblock %}
+  <script src="/static/js/theme.js"></script>
+  {% block extra_js %}{% endblock %}
+</body>
+</html>

@@ -1,7 +1,14 @@
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
 .vscode/
 *.conf
 *.xml
+build/
+dist/
+*.spec
+.env
+.streamlit/secrets.toml
+
 

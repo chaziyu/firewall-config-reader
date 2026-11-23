@@ -1,0 +1,213 @@
+/* static/css/tsf.css — TSF Explorer split-pane tree, search, and paginated code viewer */
+
+.tsf-search-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  background: var(--fw-surface);
+  border: 1px solid var(--fw-border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+
+.tsf-search-bar .fw-input {
+  flex: 1 1 280px;
+}
+
+.tsf-mode-group {
+  display: inline-flex;
+  border: 1px solid var(--fw-border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.tsf-mode-btn {
+  padding: 6px 12px;
+  font-size: 12.5px;
+  font-weight: 500;
+  background: var(--fw-surface-2);
+  color: var(--fw-muted);
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.tsf-mode-btn.active {
+  background: var(--fw-accent);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.tsf-split {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+@media (max-width: 960px) {
+  .tsf-split { grid-template-columns: 1fr; }
+}
+
+.tsf-tree-pane {
+  background: var(--fw-surface);
+  border: 1px solid var(--fw-border);
+  border-radius: 10px;
+  padding: 10px;
+  max-height: calc((100vh / var(--fw-zoom-factor, 0.92)) - 220px);
+  overflow: auto;
+}
+
+.tsf-tree-node {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 7px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--fw-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  user-select: none;
+}
+
+.tsf-tree-node:hover {
+  background: var(--fw-surface-2);
+}
+
+.tsf-tree-node.selected {
+  background: var(--fw-accent-soft);
+  color: var(--fw-accent-hover);
+  font-weight: 600;
+}
+
+.tsf-tree-dir {
+  font-weight: 600;
+}
+
+.tsf-tree-size {
+  margin-left: auto;
+  font-family: var(--fw-font-mono);
+  font-size: 11px;
+  color: var(--fw-muted);
+  flex-shrink: 0;
+}
+
+.tsf-tree-children {
+  padding-left: 16px;
+}
+
+.tsf-viewer-pane {
+  background: var(--fw-surface);
+  border: 1px solid var(--fw-border);
+  border-radius: 10px;
+  overflow: hidden;
+  min-height: 460px;
+}
+
+.tsf-viewer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  background: var(--fw-surface-2);
+  border-bottom: 1px solid var(--fw-border);
+}
+
+.tsf-viewer-path {
+  font-family: var(--fw-font-mono);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fw-text);
+  word-break: break-all;
+}
+
+.tsf-viewer-meta {
+  font-size: 11.5px;
+  color: var(--fw-muted);
+}
+
+.tsf-code-wrap {
+  max-height: calc((100vh / var(--fw-zoom-factor, 0.92)) - 300px);
+  overflow: auto;
+  background: var(--fw-bg);
+  font-family: var(--fw-font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.tsf-code-line {
+  display: flex;
+  padding: 0 12px;
+}
+
+.tsf-code-line:hover {
+  background: var(--fw-surface-2);
+}
+
+.tsf-code-line.highlight {
+  background: var(--fw-warn-soft);
+}
+
+.tsf-line-no {
+  width: 56px;
+  flex-shrink: 0;
+  text-align: right;
+  padding-right: 14px;
+  color: var(--fw-muted);
+  user-select: none;
+}
+
+.tsf-line-text {
+  white-space: pre;
+  color: var(--fw-text);
+}
+
+.tsf-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--fw-border);
+  background: var(--fw-surface-2);
+  font-size: 12px;
+  color: var(--fw-muted);
+}
+
+.tsf-result-list {
+  max-height: calc((100vh / var(--fw-zoom-factor, 0.92)) - 280px);
+  overflow: auto;
+}
+
+.tsf-result-item {
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--fw-border);
+  cursor: pointer;
+}
+
+.tsf-result-item:hover {
+  background: var(--fw-surface-2);
+}
+
+.tsf-result-path {
+  font-family: var(--fw-font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fw-accent-hover);
+}
+
+.tsf-result-snippet {
+  font-family: var(--fw-font-mono);
+  font-size: 11.5px;
+  color: var(--fw-muted);
+  margin-top: 3px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}

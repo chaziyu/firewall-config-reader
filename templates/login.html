@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Sign In — Firewall Config Reader{% endblock %}
+{% block body %}
+<div class="fw-login-wrap">
+  <div class="fw-login-head">
+    <img src="/assets/app_logo.png" alt="Logo" style="width:44px;height:44px;margin-bottom:10px;" />
+    <div class="fw-login-eyebrow">Restricted Console</div>
+    <h2>Firewall Config Reader</h2>
+    <p>Enter the access password to continue.</p>
+  </div>
+  {% if error %}
+  <div class="fw-alert fw-alert-error">{{ error }}</div>
+  {% endif %}
+  <form method="post" action="/login">
+    <div style="margin-bottom: 12px;">
+      <input
+        class="fw-input"
+        type="password"
+        name="password"
+        placeholder="Access password"
+        autofocus
+        required
+      />
+    </div>
+    <button type="submit" class="fw-btn fw-btn-primary fw-btn-block">Sign in</button>
+  </form>
+</div>
+{% endblock %}

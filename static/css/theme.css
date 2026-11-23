@@ -1,0 +1,80 @@
+/* static/css/theme.css — Precision security telemetry dark & light design tokens */
+
+:root,
+[data-theme="dark"] {
+  --fw-zoom-factor: 0.92;
+  --fw-bg: #0b0f14;
+  --fw-surface: #11161d;
+  --fw-surface-2: #181f29;
+  --fw-border: #242e3b;
+  --fw-border-hover: #364457;
+  --fw-text: #e6edf3;
+  --fw-muted: #8492a6;
+  --fw-accent: #2f81f7;
+  --fw-accent-hover: #58a6ff;
+  --fw-accent-soft: rgba(47, 129, 247, 0.14);
+  --fw-allow: #3fb950;
+  --fw-allow-soft: rgba(63, 185, 80, 0.14);
+  --fw-warn: #d29922;
+  --fw-warn-soft: rgba(210, 153, 34, 0.14);
+  --fw-deny: #f85149;
+  --fw-deny-soft: rgba(248, 81, 73, 0.14);
+  --fw-purple: #c084fc;
+  --fw-purple-soft: rgba(192, 132, 252, 0.14);
+
+  /* Semantic table row highlights (dark) */
+  --fw-row-danger-bg: #2d1619;
+  --fw-row-danger-text: #fca5a5;
+  --fw-row-warn-bg: #2b2312;
+  --fw-row-warn-text: #fde68a;
+  --fw-row-success-bg: #13291d;
+  --fw-row-success-text: #86efac;
+  --fw-row-info-bg: #16293d;
+  --fw-row-info-text: #bae6fd;
+  --fw-row-purple-bg: #261930;
+  --fw-row-purple-text: #e9d5ff;
+  --fw-row-muted-bg: #1c2635;
+  --fw-row-muted-text: #cbd5e1;
+  --fw-table-head-bg: #1a2330;
+  --fw-table-head-text: #b8c5d6;
+
+  --fw-font-sans: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --fw-font-mono: 'Cascadia Code', 'JetBrains Mono', 'Consolas', monospace;
+}
+
+[data-theme="light"] {
+  --fw-bg: #f5f7fa;
+  --fw-surface: #ffffff;
+  --fw-surface-2: #eef2f6;
+  --fw-border: #d8e0e8;
+  --fw-border-hover: #b7c4d3;
+  --fw-text: #111827;
+  --fw-muted: #5c6b7a;
+  --fw-accent: #0969da;
+  --fw-accent-hover: #0550ae;
+  --fw-accent-soft: rgba(9, 105, 218, 0.10);
+  --fw-allow: #1a7f37;
+  --fw-allow-soft: rgba(26, 127, 55, 0.10);
+  --fw-warn: #9a6700;
+  --fw-warn-soft: rgba(154, 103, 0, 0.10);
+  --fw-deny: #cf222e;
+  --fw-deny-soft: rgba(207, 34, 46, 0.10);
+  --fw-purple: #7c3aed;
+  --fw-purple-soft: rgba(124, 58, 237, 0.10);
+
+  /* Semantic table row highlights (light) */
+  --fw-row-danger-bg: #fdecea;
+  --fw-row-danger-text: #991b1b;
+  --fw-row-warn-bg: #fff3cd;
+  --fw-row-warn-text: #854d0e;
+  --fw-row-success-bg: #e8f8f0;
+  --fw-row-success-text: #166534;
+  --fw-row-info-bg: #eaf4fb;
+  --fw-row-info-text: #075985;
+  --fw-row-purple-bg: #f3e5f5;
+  --fw-row-purple-text: #6b21a8;
+  --fw-row-muted-bg: #e2e8f0;
+  --fw-row-muted-text: #1e293b;
+  --fw-table-head-bg: #eef2f6;
+  --fw-table-head-text: #334155;
+}

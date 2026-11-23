@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}{{ vendor }} — Firewall Config Reader{% endblock %}
+{% block extra_css %}
+<link rel="stylesheet" href="/static/css/chat.css" />
+{% endblock %}
+{% block body %}
+<div class="fw-shell">
+  <aside class="fw-sidebar" id="fw-sidebar">
+    <div class="fw-brand">
+      <img src="/assets/app_logo.png" alt="Logo" class="fw-brand-logo" />
+      <span class="fw-brand-title">Firewall Config Reader</span>
+    </div>
+
+    <div class="fw-session-pill">
+      <div class="fw-session-vendor">
+        <span class="status-dot-live"></span>
+        <span>{{ vendor }}</span>
+      </div>
+      <div class="fw-session-file" title="{{ filename }}">{{ filename }}</div>
+    </div>
+
+    <div class="fw-nav-label">Workspace</div>
+    <nav class="fw-nav-list">
+      {% for name, icon in pages %}
+      <button
+        type="button"
+        class="fw-nav-btn{% if loop.first %} active{% endif %}"
+        data-section="{{ name }}"
+      >
+        <span>{{ icon }}</span>
+        <span>{{ name }}</span>
+      </button>
+      {% endfor %}
+    </nav>
+
+    <div class="fw-sidebar-footer">
+      <hr class="fw-sidebar-divider" />
+      <button type="button" class="fw-btn fw-btn-block" id="fw-reset-config-btn">
+        ↑ Load new config
+      </button>
+      <div class="fw-sidebar-version">v2.2.0 · FastAPI Local</div>
+    </div>
+  </aside>
+
+  <main class="fw-main">
+    <header class="fw-workspace-bar">
+      <button type="button" class="fw-btn fw-btn-sm" id="fw-sidebar-toggle" title="Toggle sidebar">☰</button>
+      <div class="fw-workspace-crumb">
+        {{ vendor }}
+        <span class="fw-workspace-sep"> / </span>
+        <span id="fw-crumb-section">{{ pages[0][0] }}</span>
+      </div>
+      <span class="fw-workspace-file">{{ filename }}</span>
+      <div class="fw-workspace-right">
+        <span class="fw-badge fw-badge-allow">
+          <span class="status-dot-live"></span> Loaded
+        </span>
+        <button type="button" class="fw-btn fw-btn-sm" data-theme-toggle>☀ Light</button>
+      </div>
+    </header>
+
+    <div id="fw-workspace-content"></div>
+  </main>
+</div>
+
+<!-- Floating AI Chatbot -->
+<div id="fw-chat-backdrop" class="fw-chat-backdrop" style="display:none"></div>
+<button type="button" id="fw-chat-fab" class="fw-chat-fab" title="Ask AI about this firewall config">
+  ✨
+</button>
+<section id="fw-chat-panel" class="fw-chat-panel size-compact" style="display:none" aria-label="AI Config Assistant">
+  <header class="fw-chat-header">
+    <div>
+      <div class="fw-chat-header-title">✨ Config Assistant</div>
+      <div class="fw-chat-header-sub">{{ vendor }} · {{ filename }}</div>
+    </div>
+    <div class="fw-chat-controls">
+      <button type="button" class="fw-chat-icon-btn" id="fw-chat-key-toggle" title="Configure Gemini API Key">🔑</button>
+      <button type="button" class="fw-chat-icon-btn" data-chat-size="compact" title="Compact">◳</button>
+      <button type="button" class="fw-chat-icon-btn" data-chat-size="expanded" title="Expanded">◰</button>
+      <button type="button" class="fw-chat-icon-btn" data-chat-size="overlay" title="Overlay">⛶</button>
+      <button type="button" class="fw-chat-icon-btn" id="fw-chat-clear" title="Clear conversation">🗑</button>
+      <button type="button" class="fw-chat-icon-btn" id="fw-chat-close" title="Close">✕</button>
+    </div>
+  </header>
+  <div id="fw-chat-key-drawer" class="fw-chat-key-drawer" style="display:none">
+    <div class="fw-chat-key-row">
+      <span class="fw-chat-key-label">Gemini API Key</span>
+      <span id="fw-chat-key-badge" class="fw-chat-key-badge">Not configured</span>
+    </div>
+    <div class="fw-chat-key-form">
+      <input
+        type="password"
+        id="fw-chat-key-input"
+        class="fw-input"
+        placeholder="Paste GEMINI_API_KEY (AIza...)"
+        autocomplete="off"
+      />
+      <button type="button" id="fw-chat-key-save" class="fw-btn fw-btn-primary fw-btn-sm">Save</button>
+      <button type="button" id="fw-chat-key-clear" class="fw-btn fw-btn-sm" title="Clear session key">Clear</button>
+    </div>
+    <div class="fw-chat-key-hint">Stored in memory for your current session only — never saved to disk or shared with other users.</div>
+  </div>
+  <div id="fw-chat-mismatch" class="fw-chat-mismatch" style="display:none"></div>
+  <div id="fw-chat-messages" class="fw-chat-messages">
+    <div class="fw-chat-empty">Ask anything about policies, routes, VPNs, interfaces, or security profiles in this config.</div>
+  </div>
+  <form id="fw-chat-form" class="fw-chat-input-bar">
+    <input
+      type="text"
+      id="fw-chat-input"
+      class="fw-input"
+      placeholder="Ask about this config..."
+      autocomplete="off"
+    />
+    <button type="submit" id="fw-chat-send" class="fw-btn fw-btn-primary">Send</button>
+  </form>
+</section>
+
+<script>
+  document.body.dataset.vendor = {{ vendor | tojson }};
+  document.body.dataset.filename = {{ filename | tojson }};
+</script>
+{% endblock %}
+{% block extra_js %}
+<script src="/static/js/table.js"></script>
+<script src="/static/js/workspace.js"></script>
+<script src="/static/js/chat.js"></script>
+{% endblock %}

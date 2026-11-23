@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}TSF Explorer — Firewall Config Reader{% endblock %}
+{% block extra_css %}
+<link rel="stylesheet" href="/static/css/tsf.css" />
+{% endblock %}
+{% block body %}
+<div class="fw-shell">
+  <aside class="fw-sidebar" id="fw-sidebar">
+    <div class="fw-brand">
+      <img src="/assets/app_logo.png" alt="Logo" class="fw-brand-logo" />
+      <span class="fw-brand-title">Firewall Config Reader</span>
+    </div>
+
+    <div class="fw-session-pill">
+      <div class="fw-session-vendor">
+        <span class="status-dot-live"></span>
+        <span>TSF Archive</span>
+      </div>
+      <div class="fw-session-file" title="{{ filename }}">{{ filename }}</div>
+    </div>
+
+    <div class="fw-nav-label">TSF Archive</div>
+    <p class="fw-caption">
+      Browse the extracted directory tree, filter by filename, or search file contents in the main panel.
+    </p>
+
+    <div class="fw-sidebar-footer">
+      <hr class="fw-sidebar-divider" />
+      <button type="button" class="fw-btn fw-btn-block" id="fw-reset-tsf-btn">
+        ↑ Load new archive
+      </button>
+      <div class="fw-sidebar-version">v2.2.0 · FastAPI Local</div>
+    </div>
+  </aside>
+
+  <main class="fw-main">
+    <header class="fw-workspace-bar">
+      <button type="button" class="fw-btn fw-btn-sm" id="fw-sidebar-toggle" title="Toggle sidebar">☰</button>
+      <div class="fw-workspace-crumb">
+        TSF Package <span class="fw-workspace-sep"> / </span> Explorer
+      </div>
+      <span class="fw-workspace-file">{{ filename }}</span>
+      <div class="fw-workspace-right">
+        <span class="fw-badge fw-badge-info" id="tsf-index-status">Indexing...</span>
+        <button type="button" class="fw-btn fw-btn-sm" data-theme-toggle>☀ Light</button>
+      </div>
+    </header>
+
+    <div class="tsf-search-bar">
+      <div class="tsf-mode-group">
+        <button type="button" class="tsf-mode-btn active" data-mode="filename">Filename</button>
+        <button type="button" class="tsf-mode-btn" data-mode="content">Content</button>
+      </div>
+      <input
+        type="text"
+        id="tsf-search-input"
+        class="fw-input"
+        placeholder="Search filenames (e.g. mp-log, running-config, dp-monitor)..."
+      />
+      <button type="button" class="fw-btn fw-btn-primary" id="tsf-search-btn">Search</button>
+      <button type="button" class="fw-btn" id="tsf-clear-search">Clear</button>
+    </div>
+
+    <div class="tsf-split">
+      <div class="tsf-tree-pane" id="tsf-tree">
+        <div class="fw-caption">Loading directory tree...</div>
+      </div>
+      <div class="tsf-viewer-pane" id="tsf-viewer">
+        <div style="padding:24px;color:var(--fw-muted);">
+          Select a file from the directory tree or run a search above.
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+{% endblock %}
+{% block extra_js %}
+<script src="/static/js/tsf.js"></script>
+{% endblock %}
