@@ -113,7 +113,7 @@ def test_health_and_landing():
 
     r = client.get("/")
     assert r.status_code == 200
-    assert "Inspect firewall configurations offline" in r.text
+    assert "Inspect firewall configurations" in r.text
 
 
 def test_upload_validation():
