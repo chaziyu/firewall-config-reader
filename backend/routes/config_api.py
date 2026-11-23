@@ -9,11 +9,11 @@ from pathlib import PurePath
 import re
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from backend.auth import is_authenticated
-from backend.session_store import SessionData, store
+from backend.session_store import SessionData, is_loopback_request, store
 
 router = APIRouter(prefix="/api")
 
@@ -169,7 +169,13 @@ async def fg_policy_lookup(body: FgPolicyLookupRequest, request: Request):
 
 @router.get("/export/excel")
 def export_config_excel(request: Request):
-    from backend.excel_export import export_fortigate_excel, export_paloalto_excel
+    from backend.excel_export import (
+        export_fortigate_excel,
+        export_paloalto_excel,
+        get_downloads_dir,
+        unique_export_path,
+    )
+    from backend.update_service import is_frozen_desktop_exe
 
     sess = store.get_existing(request)
     if not is_authenticated(sess):
@@ -186,8 +192,14 @@ def export_config_excel(request: Request):
 
     stem = PurePath(sess.filename or "firewall_config").stem
     safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("_") or "firewall_config"
-    out_name = f"{safe_stem}_export.xlsx"
+    out_stem = f"{safe_stem}_export"
 
+    if is_frozen_desktop_exe() and is_loopback_request(request):
+        dest = unique_export_path(get_downloads_dir(), out_stem, ".xlsx")
+        dest.write_bytes(xlsx_bytes)
+        return JSONResponse({"saved": True, "filename": dest.name, "path": str(dest)})
+
+    out_name = f"{out_stem}.xlsx"
     return Response(
         content=xlsx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

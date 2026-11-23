@@ -560,6 +560,17 @@
           if (!res.ok) {
             throw new Error(`Export failed (${res.status})`);
           }
+          const ctype = res.headers.get("Content-Type") || "";
+          if (ctype.includes("application/json")) {
+            const info = await res.json();
+            exportExcelBtn.textContent = `✓ Saved: ${info.filename || "Excel"}`;
+            exportExcelBtn.title = info.path ? `Saved to ${info.path}` : "Saved to Downloads";
+            setTimeout(() => {
+              exportExcelBtn.textContent = origText;
+              exportExcelBtn.title = "Export all extracted data to Excel (.xlsx)";
+            }, 3500);
+            return;
+          }
           const blob = await res.blob();
           const disp = res.headers.get("Content-Disposition") || "";
           const match = disp.match(/filename="?([^";]+)"?/i);
@@ -576,7 +587,9 @@
           alert(err && err.message ? err.message : "Failed to export Excel file.");
         } finally {
           exportExcelBtn.disabled = false;
-          exportExcelBtn.textContent = origText;
+          if (exportExcelBtn.textContent === "Exporting...") {
+            exportExcelBtn.textContent = origText;
+          }
         }
       });
     }

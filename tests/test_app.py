@@ -106,7 +106,7 @@ def _make_tsf_zip() -> bytes:
 
 
 def test_health_and_landing():
-    client = TestClient(create_app())
+    client = TestClient(create_app(), client=("127.0.0.1", 50000))
     r = client.get("/health")
     assert r.status_code == 200
     assert r.json() == {"status": "ok"}
@@ -117,7 +117,7 @@ def test_health_and_landing():
 
 
 def test_upload_validation():
-    client = TestClient(create_app())
+    client = TestClient(create_app(), client=("127.0.0.1", 50000))
     r = client.post("/api/upload", files={"file": ("malware.exe", b"MZ\x90\x00", "application/octet-stream")})
     assert r.status_code == 400
 
@@ -126,7 +126,7 @@ def test_upload_validation():
 
 
 def test_palo_alto_full_flow():
-    client = TestClient(create_app())
+    client = TestClient(create_app(), client=("127.0.0.1", 50000))
     r = client.post("/api/upload", files={"file": ("running.xml", SAMPLE_PA_XML, "application/xml")})
     assert r.status_code == 200
     assert r.json()["vendor"] == "Palo Alto"
@@ -159,7 +159,7 @@ def test_palo_alto_full_flow():
 
 
 def test_fortigate_full_flow_and_lookup():
-    client = TestClient(create_app())
+    client = TestClient(create_app(), client=("127.0.0.1", 50000))
     r = client.post("/api/upload", files={"file": ("fgt.conf", SAMPLE_FG_CONF, "text/plain")})
     assert r.status_code == 200
     assert r.json()["vendor"] == "FortiGate"
@@ -210,7 +210,7 @@ def test_fortigate_full_flow_and_lookup():
 
 
 def test_tsf_full_flow():
-    client = TestClient(create_app())
+    client = TestClient(create_app(), client=("127.0.0.1", 50000))
     r = client.post("/api/upload", files={"file": ("techsupport.zip", _make_tsf_zip(), "application/zip")})
     assert r.status_code == 200
     job_id = r.json()["job_id"]
@@ -243,7 +243,7 @@ def test_tsf_full_flow():
 
 def test_optional_password_auth(monkeypatch):
     monkeypatch.setenv("FW_PASSWORD", "supersecret")
-    client = TestClient(create_app())
+    client = TestClient(create_app(), client=("127.0.0.1", 50000))
 
     r = client.get("/", follow_redirects=False)
     assert r.status_code == 303
@@ -263,7 +263,7 @@ def test_optional_password_auth(monkeypatch):
 def test_chat_api_key_history_and_error_handling(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
-    client = TestClient(create_app())
+    client = TestClient(create_app(), client=("127.0.0.1", 50000))
 
     r = client.post("/api/upload", files={"file": ("fgt.conf", SAMPLE_FG_CONF, "text/plain")})
     assert r.status_code == 200
@@ -335,7 +335,7 @@ config system zone
     next
 end
 """
-    client = TestClient(create_app())
+    client = TestClient(create_app(), client=("127.0.0.1", 50000))
     r = client.post("/api/upload", files={"file": ("ifaces.conf", fg_conf, "text/plain")})
     assert r.status_code == 200
 
@@ -405,7 +405,7 @@ config vpn ipsec phase1-interface
 end
 """
     )
-    client = TestClient(create_app())
+    client = TestClient(create_app(), client=("127.0.0.1", 50000))
     r = client.post("/api/upload", files={"file": ("secret_fgt.conf", fg_with_secrets, "text/plain")})
     assert r.status_code == 200
 
@@ -470,7 +470,7 @@ def test_auto_update_check_and_sha256_verification(monkeypatch):
         ),
     )
 
-    client = TestClient(create_app())
+    client = TestClient(create_app(), client=("127.0.0.1", 50000))
     # Proxied / public server visitors have auto-update disabled (mode="cloud")
     pub_res = client.get("/api/update/check", headers={"X-Forwarded-For": "203.0.113.10"})
     assert pub_res.status_code == 200
@@ -520,6 +520,34 @@ def test_excel_export_for_paloalto_and_fortigate():
         for row in wb_fg["Policy & Objects"].iter_rows()
         for cell in row
     )
+
+
+def test_desktop_exe_excel_export_direct_save_with_dedup(monkeypatch, tmp_path):
+    import backend.excel_export as excel_mod
+    import backend.update_service as upd_mod
+
+    monkeypatch.setattr(upd_mod, "is_frozen_desktop_exe", lambda: True)
+    monkeypatch.setattr(excel_mod, "get_downloads_dir", lambda: tmp_path)
+
+    client = TestClient(create_app(), client=("127.0.0.1", 50000))
+    assert client.post("/api/upload", files={"file": ("myfw.conf", SAMPLE_FG_CONF, "text/plain")}).status_code == 200
+
+    r1 = client.get("/api/export/excel")
+    assert r1.status_code == 200
+    assert r1.json()["saved"] is True
+    assert r1.json()["filename"] == "myfw_export.xlsx"
+    assert (tmp_path / "myfw_export.xlsx").exists()
+
+    r2 = client.get("/api/export/excel")
+    assert r2.status_code == 200
+    assert r2.json()["filename"] == "myfw_export-1.xlsx"
+    assert (tmp_path / "myfw_export-1.xlsx").exists()
+
+    r3 = client.get("/api/export/excel")
+    assert r3.status_code == 200
+    assert r3.json()["filename"] == "myfw_export-2.xlsx"
+    assert (tmp_path / "myfw_export-2.xlsx").exists()
+
 
 
 
