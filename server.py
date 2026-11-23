@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from backend.routes import chat_api, config_api, pages, tsf_api, upload
+from backend.routes import chat_api, config_api, pages, tsf_api, update_api, upload
 from backend.session_store import store
 
 ROOT_DIR = Path(__file__).resolve().parent
@@ -26,7 +26,7 @@ async def lifespan(_app: FastAPI):
 def create_app() -> FastAPI:
     app = FastAPI(
         title="Firewall Config Reader",
-        version="2.2.0",
+        version="2.2.1",
         docs_url=None,
         redoc_url=None,
         lifespan=lifespan,
@@ -44,6 +44,7 @@ def create_app() -> FastAPI:
     app.include_router(config_api.router)
     app.include_router(tsf_api.router)
     app.include_router(chat_api.router)
+    app.include_router(update_api.router)
 
     return app
 

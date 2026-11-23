@@ -199,6 +199,51 @@ a {
   font-size: 11px;
   color: var(--fw-muted);
   padding: 10px 4px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.fw-update-check-link {
+  background: transparent;
+  border: none;
+  color: var(--fw-accent-hover);
+  font-family: var(--fw-font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+}
+
+.fw-update-check-link:hover {
+  text-decoration: underline;
+}
+
+.fw-update-box {
+  margin-top: 8px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: var(--fw-allow-soft);
+  border: 1px solid rgba(63, 185, 80, 0.42);
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fw-update-title {
+  font-weight: 700;
+  color: var(--fw-allow);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.fw-update-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
 }
 
 .fw-caption {

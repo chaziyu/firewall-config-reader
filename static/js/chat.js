@@ -140,6 +140,20 @@
           keyBadge.classList.remove("is-configured");
         }
       }
+      if (keyDrawer) {
+        const labelEl = keyDrawer.querySelector(".fw-chat-key-label");
+        if (labelEl) {
+          labelEl.textContent = keyConfigured ? "🔑 Gemini API Key" : "🔑 Gemini API Key Required";
+        }
+        // Automatically show the API key row whenever no key is configured yet
+        if (!keyConfigured) {
+          keyDrawer.style.display = "flex";
+          if (keyToggleBtn) keyToggleBtn.classList.add("active");
+        } else {
+          keyDrawer.style.display = "none";
+          if (keyToggleBtn) keyToggleBtn.classList.remove("active");
+        }
+      }
     }
 
     function setSize(sz) {

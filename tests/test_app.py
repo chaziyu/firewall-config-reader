@@ -427,5 +427,60 @@ end
     assert b"[REDACTED]" in unsealed
 
 
+def test_auto_update_check_and_sha256_verification(monkeypatch):
+    from backend.update_service import _verify_sha256, is_newer_version
+    import backend.routes.update_api as update_api_mod
+
+    assert is_newer_version("2.3.0", "2.2.0") is True
+    assert is_newer_version("v2.2.1", "2.2.0") is True
+    assert is_newer_version("2.2.0", "2.2.0") is False
+    assert is_newer_version("2.1.9", "2.2.0") is False
+
+    fake_exe = b"MZ" + b"\x00" * 2048
+    import hashlib
+
+    h = hashlib.sha256(fake_exe).hexdigest()
+    sums_txt = f"{h}  FirewallConfigReader-Setup-2.3.0.exe\n"
+    assert _verify_sha256(fake_exe, "FirewallConfigReader-Setup-2.3.0.exe", sums_txt) is True
+    assert _verify_sha256(fake_exe + b"x", "FirewallConfigReader-Setup-2.3.0.exe", sums_txt) is False
+
+    monkeypatch.setattr(
+        update_api_mod,
+        "check_for_updates",
+        lambda is_loopback=True: (
+            {
+                "mode": "cloud",
+                "checked": True,
+                "current_version": "2.2.0",
+                "latest_version": "2.2.0",
+                "update_available": False,
+                "can_auto_install": False,
+            }
+            if not is_loopback
+            else {
+                "mode": "source",
+                "checked": True,
+                "current_version": "2.2.0",
+                "latest_version": "2.3.0",
+                "update_available": True,
+                "can_auto_install": True,
+                "install_method": "git_pull",
+                "release_url": "https://github.com/chaziyu/firewall-config-reader/releases/tag/v2.3.0",
+            }
+        ),
+    )
+
+    client = TestClient(create_app())
+    # Proxied / public server visitors have auto-update disabled (mode="cloud")
+    pub_res = client.get("/api/update/check", headers={"X-Forwarded-For": "203.0.113.10"})
+    assert pub_res.status_code == 200
+    assert pub_res.json()["mode"] == "cloud"
+    assert pub_res.json()["update_available"] is False
+
+    pub_install = client.post("/api/update/install", headers={"X-Forwarded-For": "203.0.113.10"})
+    assert pub_install.status_code == 403
+
+
+
 
 

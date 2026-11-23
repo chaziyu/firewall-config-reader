@@ -38,7 +38,7 @@
       <button type="button" class="fw-btn fw-btn-block" id="fw-reset-config-btn">
         ↑ Load new config
       </button>
-      <div class="fw-sidebar-version">v2.2.0 · FastAPI Local</div>
+      <div class="fw-sidebar-version">v2.2.1 · FastAPI Local</div>
     </div>
   </aside>
 
@@ -52,9 +52,6 @@
       </div>
       <span class="fw-workspace-file">{{ filename }}</span>
       <div class="fw-workspace-right">
-        <span class="fw-badge fw-badge-allow">
-          <span class="status-dot-live"></span> Loaded
-        </span>
         <button type="button" class="fw-btn fw-btn-sm" data-theme-toggle>☀ Light</button>
       </div>
     </header>
@@ -83,9 +80,9 @@
       <button type="button" class="fw-chat-icon-btn" id="fw-chat-close" title="Close">✕</button>
     </div>
   </header>
-  <div id="fw-chat-key-drawer" class="fw-chat-key-drawer" style="display:none">
+  <div id="fw-chat-key-drawer" class="fw-chat-key-drawer">
     <div class="fw-chat-key-row">
-      <span class="fw-chat-key-label">Gemini API Key</span>
+      <span class="fw-chat-key-label">🔑 Gemini API Key Required</span>
       <span id="fw-chat-key-badge" class="fw-chat-key-badge">Not configured</span>
     </div>
     <div class="fw-chat-key-form">

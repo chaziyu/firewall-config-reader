@@ -173,5 +173,140 @@
         sidebar.classList.toggle("collapsed");
       });
     }
+
+    initAutoUpdateChecker();
   });
+
+  function initAutoUpdateChecker() {
+    const versionEl = document.querySelector(".fw-sidebar-version");
+    if (!versionEl) return;
+
+    const checkBtn = document.createElement("button");
+    checkBtn.type = "button";
+    checkBtn.className = "fw-update-check-link";
+    checkBtn.textContent = "Check update";
+    checkBtn.title = "Check GitHub Releases for a newer version";
+    versionEl.appendChild(checkBtn);
+
+    let updateBox = null;
+
+    function renderUpdateBox(data) {
+      if (updateBox) updateBox.remove();
+      if (!data || !data.update_available) return;
+
+      updateBox = document.createElement("div");
+      updateBox.className = "fw-update-box";
+
+      const title = document.createElement("div");
+      title.className = "fw-update-title";
+      title.textContent = `⬆ Update v${data.latest_version} available`;
+      updateBox.appendChild(title);
+
+      const actions = document.createElement("div");
+      actions.className = "fw-update-actions";
+
+      if (data.can_auto_install) {
+        const isGitPull = data.install_method === "git_pull";
+        const installBtn = document.createElement("button");
+        installBtn.type = "button";
+        installBtn.className = "fw-btn fw-btn-primary fw-btn-sm";
+        installBtn.style.flex = "1";
+        installBtn.textContent = isGitPull ? "Pull Update (git)" : "Update & Restart";
+        installBtn.addEventListener("click", async () => {
+          installBtn.disabled = true;
+          installBtn.textContent = isGitPull ? "Running git pull..." : "Downloading...";
+          try {
+            const res = await fetch("/api/update/install", { method: "POST" });
+            const resData = await res.json();
+            if (!res.ok) {
+              installBtn.textContent = "Retry Update";
+              installBtn.disabled = false;
+              alert(`Update failed: ${resData.detail || "Unknown error"}`);
+            } else {
+              installBtn.textContent = isGitPull ? "Updated ✓" : "Installing...";
+              title.textContent = resData.message || "Update complete.";
+            }
+          } catch (err) {
+            installBtn.textContent = "Retry Update";
+            installBtn.disabled = false;
+            alert(`Network error: ${err.message}`);
+          }
+        });
+        actions.appendChild(installBtn);
+      } else if (data.release_url) {
+        const link = document.createElement("a");
+        link.href = data.release_url;
+        link.target = "_blank";
+        link.rel = "noopener";
+        link.className = "fw-btn fw-btn-primary fw-btn-sm";
+        link.style.flex = "1";
+        link.textContent = "Download Release";
+        actions.appendChild(link);
+      }
+
+      updateBox.appendChild(actions);
+      versionEl.parentElement.appendChild(updateBox);
+    }
+
+    async function runCheck(manual = false) {
+      if (manual) {
+        checkBtn.textContent = "Checking...";
+        checkBtn.disabled = true;
+      }
+      try {
+        const res = await fetch("/api/update/check");
+        if (!res.ok) return;
+        const data = await res.json();
+        try {
+          sessionStorage.setItem("fw_update_status", JSON.stringify(data));
+        } catch (_) {}
+
+        // Hide the update check button completely on public cloud / Render deployments
+        if (data.mode === "cloud") {
+          checkBtn.style.display = "none";
+          return;
+        }
+
+        if (data.update_available) {
+          checkBtn.textContent = `v${data.latest_version} new!`;
+          renderUpdateBox(data);
+        } else if (manual) {
+          checkBtn.textContent = data.checked ? "Up to date ✓" : "Offline";
+          setTimeout(() => {
+            checkBtn.textContent = "Check update";
+          }, 3000);
+        }
+      } catch (_) {
+        if (manual) {
+          checkBtn.textContent = "Offline";
+          setTimeout(() => {
+            checkBtn.textContent = "Check update";
+          }, 3000);
+        }
+      } finally {
+        checkBtn.disabled = false;
+      }
+    }
+
+    checkBtn.addEventListener("click", () => runCheck(true));
+
+    // Use cached check result within the same browser session or auto-check once in background
+    try {
+      const cached = sessionStorage.getItem("fw_update_status");
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed && parsed.mode === "cloud") {
+          checkBtn.style.display = "none";
+          return;
+        }
+        if (parsed && parsed.update_available) {
+          checkBtn.textContent = `v${parsed.latest_version} new!`;
+          renderUpdateBox(parsed);
+        }
+        return;
+      }
+    } catch (_) {}
+
+    setTimeout(() => runCheck(false), 1200);
+  }
 })();
