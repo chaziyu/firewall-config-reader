@@ -582,7 +582,7 @@
           document.body.appendChild(a);
           a.click();
           a.remove();
-          URL.revokeObjectURL(url);
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
         } catch (err) {
           alert(err && err.message ? err.message : "Failed to export Excel file.");
         } finally {

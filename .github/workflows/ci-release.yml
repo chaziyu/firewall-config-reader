@@ -15,9 +15,9 @@ on:
   workflow_dispatch:
     inputs:
       app_version:
-        description: "Version number for manual build (e.g. 2.3.1)"
+        description: "Version number for manual build (e.g. 2.3.2)"
         required: false
-        default: "2.3.1"
+        default: "2.3.2"
 
 permissions:
   contents: write
@@ -41,7 +41,7 @@ jobs:
           if ($content -match 'APP_VERSION\s*=\s*"([^"]+)"') {
             $ver = $matches[1].TrimStart("v")
           } else {
-            $ver = "2.3.1"
+            $ver = "2.3.2"
           }
           "app_version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
