@@ -161,7 +161,7 @@ class PaloNetworkParser(PaloAltoParser):
         vr_map = self._build_vr_map()
         vlan_units = net.find("interface/vlan/units")
         rows = []
-        if vlan_units:
+        if vlan_units is not None:
             for e in vlan_units.findall("entry"):
                 name = e.get("name", "")
                 ips = [x.get("name", "") for x in e.findall("ip/entry")]
@@ -189,7 +189,7 @@ class PaloNetworkParser(PaloAltoParser):
         vr_map = self._build_vr_map()
         lo_units = net.find("interface/loopback/units")
         rows = []
-        if lo_units:
+        if lo_units is not None:
             for e in lo_units.findall("entry"):
                 name = e.get("name", "")
                 ips = [x.get("name", "") for x in e.findall("ip/entry")]
@@ -213,7 +213,7 @@ class PaloNetworkParser(PaloAltoParser):
         vr_map = self._build_vr_map()
         tun_units = net.find("interface/tunnel/units")
         rows = []
-        if tun_units:
+        if tun_units is not None:
             for e in tun_units.findall("entry"):
                 name = e.get("name", "")
                 ips = [x.get("name", "") for x in e.findall("ip/entry")]
@@ -237,7 +237,7 @@ class PaloNetworkParser(PaloAltoParser):
         vr_map = self._build_vr_map()
         sdwan_units = net.find("interface/sdwan/units")
         rows = []
-        if sdwan_units:
+        if sdwan_units is not None:
             for e in sdwan_units.findall("entry"):
                 name = e.get("name", "")
                 members = [m.text for m in e.findall("interface/member") if m.text]
@@ -350,7 +350,7 @@ class PaloNetworkParser(PaloAltoParser):
 
             def _p(tag):
                 el = proto.find(tag) if proto is not None else None
-                return el.findtext("enable", "no") if el else "no"
+                return el.findtext("enable", "no") if el is not None else "no"
 
             intfs = [m.text for m in vr.findall("interface/member") if m.text]
             rows.append(
@@ -378,7 +378,7 @@ class PaloNetworkParser(PaloAltoParser):
         if ecmp is not None:
             algo_el = ecmp.find("algorithm")
             method = "ip-modulo"
-            if algo_el:
+            if algo_el is not None:
                 for a in [
                     "ip-modulo",
                     "ip-hash",
@@ -397,7 +397,7 @@ class PaloNetworkParser(PaloAltoParser):
 
         ad = vr_el.find("admin-dists")
         ad_info = {}
-        if ad:
+        if ad is not None:
             for k in [
                 "static",
                 "static-ipv6",
@@ -470,7 +470,7 @@ class PaloNetworkParser(PaloAltoParser):
             return []
         ike_gws = {}
         gw_el = net.find("ike/gateway")
-        if gw_el:
+        if gw_el is not None:
             for e in gw_el.findall("entry"):
                 ike_gws[e.get("name", "")] = {
                     "interface": e.findtext("local-address/interface", "-"),
@@ -480,8 +480,10 @@ class PaloNetworkParser(PaloAltoParser):
         zone_map = self._build_zone_map()
         vr_map = self._build_vr_map()
         rows = []
-        ipsec_el = net.find("ipsec")
-        if ipsec_el:
+        ipsec_el = net.find("tunnel/ipsec")
+        if ipsec_el is None:
+            ipsec_el = net.find("ipsec")
+        if ipsec_el is not None:
             for e in ipsec_el.findall("entry"):
                 tun = e.findtext("tunnel-interface", "-")
                 gw_name = ""
@@ -557,18 +559,18 @@ class PaloNetworkParser(PaloAltoParser):
             lease = (
                 "unlimited"
                 if (lease_el is not None and lease_el.find("unlimited") is not None)
-                else (lease_el.findtext("timeout", "-") if lease_el else "-")
+                else (lease_el.findtext("timeout", "-") if lease_el is not None else "-")
             )
             pools = [m.text for m in server.findall("ip-pool/member") if m.text]
             rows.append(
                 {
                     "Interface": e.get("name", "-"),
                     "Mode": server.findtext("mode", "auto"),
-                    "Gateway": opt.findtext("gateway", "-") if opt else "-",
-                    "Subnet Mask": opt.findtext("subnet-mask", "-") if opt else "-",
+                    "Gateway": opt.findtext("gateway", "-") if opt is not None else "-",
+                    "Subnet Mask": opt.findtext("subnet-mask", "-") if opt is not None else "-",
                     "Lease": lease,
-                    "DNS Primary": opt.findtext("dns/primary", "-") if opt else "-",
-                    "DNS Secondary": opt.findtext("dns/secondary", "-") if opt else "-",
+                    "DNS Primary": opt.findtext("dns/primary", "-") if opt is not None else "-",
+                    "DNS Secondary": opt.findtext("dns/secondary", "-") if opt is not None else "-",
                     "IP Pools": ", ".join(pools) if pools else "-",
                 }
             )
@@ -639,11 +641,11 @@ class PaloNetworkParser(PaloAltoParser):
                 {
                     "Name": e.get("name", "-"),
                     "Interface": (
-                        pc.findtext("local-address/interface", "-") if pc else "-"
+                        pc.findtext("local-address/interface", "-") if pc is not None else "-"
                     ),
-                    "IP": pc.findtext("local-address/ip/ipv4", "-") if pc else "-",
+                    "IP": pc.findtext("local-address/ip/ipv4", "-") if pc is not None else "-",
                     "SSL Profile": (
-                        pc.findtext("ssl-tls-service-profile", "-") if pc else "-"
+                        pc.findtext("ssl-tls-service-profile", "-") if pc is not None else "-"
                     ),
                     "Auth Profile": auth_profile,
                 }
@@ -660,8 +662,8 @@ class PaloNetworkParser(PaloAltoParser):
             rows.append(
                 {
                     "Name": e.get("name", "-"),
-                    "Interface": la.findtext("interface", "-") if la else "-",
-                    "Local IP": la.findtext("ip/ipv4", "-") if la else "-",
+                    "Interface": la.findtext("interface", "-") if la is not None else "-",
+                    "Local IP": la.findtext("ip/ipv4", "-") if la is not None else "-",
                     "Tunnel": e.findtext("remote-user-tunnel", "-"),
                     "SSL Profile": e.findtext("ssl-tls-service-profile", "-"),
                     "Tunnel Mode": e.findtext("tunnel-mode", "no"),

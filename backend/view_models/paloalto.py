@@ -17,6 +17,11 @@ from backend.exposure_check import (
     build_exposure_overview_blocks,
     find_paloalto_public_mgmt_exposure,
 )
+from backend.lifecycle_service import (
+    build_paloalto_lifecycle_blocks,
+    evaluate_paloalto_lifecycle,
+)
+from backend.vpn_inspector_service import build_vpn_inspector_blocks, inspect_paloalto_vpns
 
 
 def _table_block(
@@ -111,6 +116,12 @@ def build_dashboard(
     adv_routing = str(info.get("adv_routing", "Off"))
     dup_ip = str(info.get("dup_ip", "Disable"))
 
+    lifecycle = evaluate_paloalto_lifecycle(
+        sw_version,
+        is_exact_version=bool(info.get("software_version_exact", True)),
+        cache_only=True,
+    )
+    lifecycle_badge, lifecycle_card = build_paloalto_lifecycle_blocks(lifecycle)
     exposure_findings = find_paloalto_public_mgmt_exposure(
         network_parser,
         device_parser=device_parser,
@@ -141,14 +152,12 @@ def build_dashboard(
                     "text": f"Duplicate IP: {dup_ip}",
                     "variant": "info" if dup_ip == "Enable" else "muted",
                 },
+                lifecycle_badge,
                 exposure_badge,
                 audit_badge,
             ],
         },
     ]
-    if exposure_card is not None:
-        blocks.append(exposure_card)
-    blocks.append(audit_expander)
 
     blocks.extend([
         {"type": "section_header", "title": "Management & Network Identity"},
@@ -203,6 +212,12 @@ def build_dashboard(
                 ],
             }
         )
+
+    blocks.append(lifecycle_card)
+    if exposure_card is not None:
+        blocks.append(exposure_card)
+    blocks.append({"type": "where_used_lookup", "vendor": "pa"})
+    blocks.append(audit_expander)
 
     return {"section": "Dashboard", "blocks": blocks}
 
@@ -531,7 +546,7 @@ def _qos_row_class(r: dict[str, Any]) -> str:
     return ""
 
 
-def build_network(parser: Any) -> dict[str, Any]:
+def build_network(parser: Any, policies_parser: Any = None) -> dict[str, Any]:
     # Virtual Routers
     vrs = parser.get_virtual_routers()
     if not vrs:
@@ -709,6 +724,13 @@ def build_network(parser: Any) -> dict[str, Any]:
                     "type": "tabs",
                     "id": "pa_tun_sub",
                     "tabs": [
+                        {
+                            "label": "IPSec Inspector",
+                            "blocks": build_vpn_inspector_blocks(
+                                inspect_paloalto_vpns(parser, policies_parser),
+                                "pa",
+                            ),
+                        },
                         {"label": "IPSec Tunnels", "blocks": [_table_block(parser.get_ipsec_tunnels(), "pa_ipsec", empty_text="No IPSec tunnels.", export_filename="pa_ipsec_tunnels.csv")]},
                         {"label": "GRE Tunnels", "blocks": [_table_block(parser.get_gre_tunnels(), "pa_gre", empty_text="No GRE tunnels.", export_filename="pa_gre_tunnels.csv")]},
                     ],
@@ -1068,7 +1090,7 @@ def build_paloalto_section(section: str, parsers: dict[str, Any]) -> dict[str, A
         ),
         "Policies": lambda: build_policies(parsers["Policies"]),
         "Objects": lambda: build_objects(parsers["Objects"]),
-        "Network": lambda: build_network(parsers["Network"]),
+        "Network": lambda: build_network(parsers["Network"], policies_parser=parsers.get("Policies")),
         "Device": lambda: build_device(parsers["Device"]),
     }
     if section not in builders:

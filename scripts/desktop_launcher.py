@@ -216,9 +216,9 @@ def main(argv: list[str] | None = None) -> int:
         events = getattr(window, "events", None)
         if events is not None and hasattr(events, "shown"):
             events.shown += _close_splash
-            webview.start()
+            webview.start(private_mode=True)
         else:
-            webview.start(func=_close_splash)
+            webview.start(func=_close_splash, private_mode=True)
         return 0
     finally:
         _close_splash()

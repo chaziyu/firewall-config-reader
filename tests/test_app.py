@@ -605,6 +605,10 @@ end
     assert any(b["text"] == "Public Mgmt Exposed (1)" and b["variant"] == "warn" for b in hero["badges"])
 
     card = next(b for b in summary["blocks"] if b["type"] == "card" and b.get("title") == "Public Interface Management Exposure")
+    sys_overview_idx = next(i for i, b in enumerate(summary["blocks"]) if b["type"] == "section_header" and b.get("title") == "System Overview")
+    kv_idx = next(i for i, b in enumerate(summary["blocks"]) if b["type"] == "kv_grid")
+    exposure_idx = next(i for i, b in enumerate(summary["blocks"]) if b["type"] == "card" and b.get("title") == "Public Interface Management Exposure")
+    assert sys_overview_idx < kv_idx < exposure_idx
     assert card["badge"] == {"text": "1 Exposed", "variant": "warn"}
     assert len(card["rows"]) == 1
     assert "wan1" in card["rows"][0]["label"]
@@ -1083,6 +1087,816 @@ end
     sec_tab = pa_pols["blocks"][0]["tabs"][0]
     sec_table = next(b for b in sec_tab["blocks"] if b["type"] == "table")
     assert isinstance(sec_table.get("legend"), list) and len(sec_table["legend"]) == 3
+
+
+def test_fortigate_model_and_lifecycle_evaluation(monkeypatch):
+    from datetime import date
+    from backend import lifecycle_service as ls
+    from parsers.fortigate import FortiGateParser
+
+    # 1. Model & branch extraction across header formats + serial fallback
+    p1 = FortiGateParser("#config-version=FGT60F-7.2.5-FW-build1517-230606:opmode=0:vdom=0\n")
+    assert p1.get_model() == "FGT60F"
+    assert p1.get_firmware_branch() == "7.2"
+
+    p2 = FortiGateParser("#config-version=FG60E-POE-7.2.8-FW-build1639-240328:opmode=0:vdom=0\n")
+    assert p2.get_model() == "FG60E-POE"
+    assert p2.get_firmware_branch() == "7.2"
+
+    p3 = FortiGateParser("#config-version=FGVM64-7.4.4-FW-build2662-240514:opmode=0:vdom=0\n")
+    assert p3.get_model() == "FGVM64"
+    assert p3.get_firmware_branch() == "7.4"
+
+    p_serial = FortiGateParser('config system global\n    set sn "FG100FTK21001234"\nend\n')
+    assert p_serial.get_model() == "FG100F"
+    assert p_serial.get_firmware_branch() == "Unknown"
+
+    # 2. Normalization
+    assert ls.normalize_fortigate_model("FGT60F") == "FG-60F"
+    assert ls.normalize_fortigate_model("FG60E-POE") == "FG-60E-POE"
+    assert ls.normalize_fortigate_model("FortiGate-100E") == "FG-100E"
+    assert ls.normalize_fortigate_model("FGVM64") == "FG-VM"
+    assert ls.normalize_fortigate_model("Unknown") == ""
+
+    # 3. Offline deterministic evaluations
+    ls.clear_lifecycle_cache()
+    ref_day = date(2026, 11, 24)
+
+    res_ok = ls.evaluate_fortigate_lifecycle("FGT60F", "7.4.13", allow_online=False, today=ref_day)
+    assert res_ok["badge_variant"] == "allow"
+    assert res_ok["badge_text"] == "Lifecycle OK · Up to Date"
+    assert res_ok["patch_status"] == "up_to_date"
+
+    res_patch = ls.evaluate_fortigate_lifecycle("FGT60F", "7.4.5", allow_online=False, today=ref_day)
+    assert res_patch["badge_variant"] == "warn"
+    assert res_patch["badge_text"] == "Patch Available (7.4.13)"
+    assert res_patch["latest_in_branch"] == "7.4.13"
+
+    res_branch_eos = ls.evaluate_fortigate_lifecycle("FGT60F", "7.0.19", allow_online=False, today=ref_day)
+    assert res_branch_eos["badge_variant"] == "deny"
+    assert res_branch_eos["badge_text"] == "Branch EOS"
+
+    res_hw_eos = ls.evaluate_fortigate_lifecycle("FG-60D", "6.0.18", allow_online=False, today=ref_day)
+    assert res_hw_eos["badge_variant"] == "deny"
+    assert res_hw_eos["badge_text"] == "Hardware EOS"
+    assert res_hw_eos["last_supported_firmware"] == "6.0.x"
+
+    res_vm = ls.evaluate_fortigate_lifecycle("FGVM64", "7.6.8", allow_online=False, today=ref_day)
+    assert res_vm["is_vm"] is True
+    assert res_vm["badge_variant"] == "allow"
+
+    # 4. Mocked live merge (endoflife.date + Fortinet RSS filtering out FIPS-CC)
+    ls.clear_lifecycle_cache()
+    monkeypatch.setenv("DISABLE_ONLINE_CHECKS", "0")
+    monkeypatch.setattr(
+        ls,
+        "_fetch_endoflife_branches",
+        lambda: {
+            "7.4": {
+                "release_date": "2023-05-11",
+                "eoes": "2027-05-11",
+                "eos": "2028-11-11",
+                "latest": None,
+            }
+        },
+    )
+    rss_xml = """<?xml version="1.0" encoding="utf-8"?>
+    <rss version="2.0"><channel>
+      <item><title>FortiOS 7.4.4-FIPS-CC b9481-FIPS-CC-74-15</title></item>
+      <item><title>FortiOS 7.4.15</title></item>
+      <item><title>FortiOS 7.4.14</title></item>
+    </channel></rss>"""
+
+    class _FakeResp:
+        def __init__(self, body: bytes):
+            self._body = body
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+        def read(self):
+            return self._body
+
+    monkeypatch.setattr(ls.urllib.request, "urlopen", lambda req, timeout=3.0: _FakeResp(rss_xml.encode("utf-8")))
+    rss_parsed = ls._fetch_fortinet_rss_latest()
+    assert rss_parsed == {"7.4": "7.4.15"}
+
+    monkeypatch.setattr(ls, "_fetch_fortinet_rss_latest", lambda: {"7.4": "7.4.15"})
+    res_live = ls.evaluate_fortigate_lifecycle("FGT60F", "7.4.13", allow_online=True, today=ref_day)
+    assert res_live["latest_in_branch"] == "7.4.15"
+    assert res_live["badge_variant"] == "warn"
+    assert res_live["badge_text"] == "Patch Available (7.4.15)"
+    assert "Live (endoflife.date + Fortinet RSS)" in res_live["source_label"]
+
+    # 5. Summary API is non-blocking (cache-only) and /api/fg/lifecycle populates live cache
+    ls.clear_lifecycle_cache()
+    monkeypatch.setenv("DISABLE_ONLINE_CHECKS", "0")
+    fetch_calls = {"eol": 0, "rss": 0}
+
+    def _counting_eol():
+        fetch_calls["eol"] += 1
+        return {
+            "7.2": {
+                "release_date": "2022-03-31",
+                "eoes": "2025-03-31",
+                "eos": "2026-09-30",
+                "latest": None,
+            }
+        }
+
+    def _counting_rss():
+        fetch_calls["rss"] += 1
+        return {"7.2": "7.2.15"}
+
+    monkeypatch.setattr(ls, "_fetch_endoflife_branches", _counting_eol)
+    monkeypatch.setattr(ls, "_fetch_fortinet_rss_latest", _counting_rss)
+
+    client = TestClient(create_app())
+    assert client.post("/api/upload", files={"file": ("fg.conf", SAMPLE_FG_CONF, "text/plain")}).status_code == 200
+    summary = client.get("/api/fg/Summary").json()
+    assert fetch_calls == {"eol": 0, "rss": 0}
+    hero = next(b for b in summary["blocks"] if b["type"] == "hero")
+    assert "FortiGate-60F" in hero["subtitle"]
+    assert any(b["text"] == "Branch EOS" and b["variant"] == "deny" and b.get("id") == "fg_lifecycle_badge" for b in hero["badges"])
+    lc_card = next(b for b in summary["blocks"] if b["type"] == "card" and b.get("title") == "Lifecycle & Firmware")
+    assert all("tone" not in r for r in lc_card["rows"])
+    assert lc_card.get("async_refresh_url") == "/api/fg/lifecycle"
+    assert lc_card.get("async_badge_id") == "fg_lifecycle_badge"
+    assert "Fetching live data" in lc_card["subtitle"]
+    row_map = {r["label"]: r for r in lc_card["rows"]}
+    assert row_map["Hardware Model"]["value"] == "FortiGate-60F"
+    assert "7.2.5" in row_map["Current Firmware"]["value"]
+    assert "7.2.14" in row_map["Latest Firmware in Branch"]["value"]
+
+    # Background lifecycle fetch populates live cache and updates card/badge
+    lc_resp = client.get("/api/fg/lifecycle")
+    assert lc_resp.status_code == 200
+    assert fetch_calls == {"eol": 1, "rss": 1}
+    lc_payload = lc_resp.json()
+    assert lc_payload["badge"]["id"] == "fg_lifecycle_badge"
+    assert "async_refresh_url" not in lc_payload["card"]
+    assert "Live (endoflife.date + Fortinet RSS)" in lc_payload["card"]["subtitle"]
+    live_rows = {r["label"]: r for r in lc_payload["card"]["rows"]}
+    assert "7.2.15" in live_rows["Latest Firmware in Branch"]["value"]
+
+    # Subsequent Summary uses warm cache immediately with no async_refresh_url
+    summary_warm = client.get("/api/fg/Summary").json()
+    assert fetch_calls == {"eol": 1, "rss": 1}
+    lc_card_warm = next(b for b in summary_warm["blocks"] if b["type"] == "card" and b.get("title") == "Lifecycle & Firmware")
+    assert "async_refresh_url" not in lc_card_warm
+    warm_rows = {r["label"]: r for r in lc_card_warm["rows"]}
+    assert "7.2.15" in warm_rows["Latest Firmware in Branch"]["value"]
+
+    # 6. Summary API with DISABLE_ONLINE_CHECKS=1 never triggers async refresh
+    ls.clear_lifecycle_cache()
+    monkeypatch.setenv("DISABLE_ONLINE_CHECKS", "1")
+    summary_off = client.get("/api/fg/Summary").json()
+    lc_card_off = next(b for b in summary_off["blocks"] if b["type"] == "card" and b.get("title") == "Lifecycle & Firmware")
+    assert "async_refresh_url" not in lc_card_off
+    assert "Offline snapshot" in lc_card_off["subtitle"]
+
+
+def test_paloalto_panos_lifecycle_evaluation(monkeypatch):
+    from datetime import date
+    from backend import lifecycle_service as ls
+
+    # 1. Hotfix-aware PAN-OS version tuple ordering
+    assert ls._parse_panos_version_tuple("10.2.7") == (10, 2, 7, 0)
+    assert ls._parse_panos_version_tuple("10.2.7-h3") == (10, 2, 7, 3)
+    assert ls._parse_panos_version_tuple("10.2.18-h15") == (10, 2, 18, 15)
+    assert ls._parse_panos_version_tuple("10.2.7") < ls._parse_panos_version_tuple("10.2.7-h3") < ls._parse_panos_version_tuple("10.2.18-h15")
+
+    # 2. Offline evaluations
+    ls.clear_lifecycle_cache()
+    ref_day = date(2026, 11, 24)
+
+    pa_ok = ls.evaluate_paloalto_lifecycle("12.1.10-h6", allow_online=False, today=ref_day)
+    assert pa_ok["badge_variant"] == "allow"
+    assert pa_ok["badge_text"] == "PAN-OS Up to Date"
+
+    pa_soon = ls.evaluate_paloalto_lifecycle("11.1.16-h6", allow_online=False, today=ref_day)
+    assert pa_soon["badge_variant"] == "warn"
+    assert pa_soon["badge_text"] == "Branch EOL Soon"
+
+    pa_patch = ls.evaluate_paloalto_lifecycle("11.1.4-h7", allow_online=False, today=ref_day)
+    assert pa_patch["badge_variant"] == "warn"
+    assert pa_patch["badge_text"] == "Patch Available (11.1.16-h6)"
+    assert pa_patch["latest_in_branch"] == "11.1.16-h6"
+
+    pa_eol = ls.evaluate_paloalto_lifecycle("10.2.18-h15", allow_online=False, today=ref_day)
+    assert pa_eol["badge_variant"] == "deny"
+    assert pa_eol["badge_text"] == "Branch EOL"
+
+    # 3. Non-blocking /api/pa/Dashboard + /api/pa/lifecycle background refresh
+    ls.clear_lifecycle_cache()
+    monkeypatch.setenv("DISABLE_ONLINE_CHECKS", "0")
+    calls = {"panos": 0}
+
+    def _counting_panos():
+        calls["panos"] += 1
+        return {
+            "11.1": {
+                "release_date": "2023-11-03",
+                "eos": "2027-05-03",
+                "latest": "11.1.17-h1",
+                "latest_date": "2026-11-24",
+            }
+        }
+
+    monkeypatch.setattr(ls, "_fetch_panos_endoflife_branches", _counting_panos)
+    pa_xml = SAMPLE_PA_XML.replace(
+        b'<config version="10.2.0">',
+        b'<config version="11.1.0" detail-version="11.1.4-h7">',
+    )
+    client = TestClient(create_app())
+    assert client.post("/api/upload", files={"file": ("pa.xml", pa_xml, "text/xml")}).status_code == 200
+
+    dash = client.get("/api/pa/Dashboard").json()
+    assert calls["panos"] == 0
+    hero = next(b for b in dash["blocks"] if b["type"] == "hero")
+    assert any(b.get("id") == "pa_lifecycle_badge" and b["variant"] == "warn" for b in hero["badges"])
+    pa_card = next(b for b in dash["blocks"] if b["type"] == "card" and b.get("title") == "PAN-OS Firmware")
+    mgmt_idx = next(i for i, b in enumerate(dash["blocks"]) if b["type"] == "section_header" and b.get("title") == "Management & Network Identity")
+    ha_idx = next(i for i, b in enumerate(dash["blocks"]) if b["type"] == "section_header" and b.get("title") == "High Availability")
+    lc_idx = next(i for i, b in enumerate(dash["blocks"]) if b["type"] == "card" and b.get("title") == "PAN-OS Firmware")
+    assert mgmt_idx < ha_idx < lc_idx
+    assert all("tone" not in r for r in pa_card["rows"])
+    assert pa_card.get("async_refresh_url") == "/api/pa/lifecycle"
+    assert pa_card.get("async_badge_id") == "pa_lifecycle_badge"
+    assert "Fetching live data" in pa_card["subtitle"]
+
+    # Background fetch updates card & warms cache
+    lc_resp = client.get("/api/pa/lifecycle")
+    assert lc_resp.status_code == 200
+    assert calls["panos"] == 1
+    lc_payload = lc_resp.json()
+    assert lc_payload["badge"]["text"] == "Patch Available (11.1.17-h1)"
+    assert "async_refresh_url" not in lc_payload["card"]
+    assert "Live (endoflife.date)" in lc_payload["card"]["subtitle"]
+    rows_live = {r["label"]: r["value"] for r in lc_payload["card"]["rows"]}
+    assert rows_live["Current PAN-OS"] == "11.1.4-h7 (Branch 11.1)"
+    assert "11.1.17-h1" in rows_live["Latest Patch in Branch"]
+    assert rows_live["Latest Release Date"] == "2026-11-24"
+    assert rows_live["Branch End of Life (EOL)"].startswith("2027-05-03")
+
+    # Subsequent Dashboard uses warm cache directly
+    dash_warm = client.get("/api/pa/Dashboard").json()
+    assert calls["panos"] == 1
+    pa_card_warm = next(b for b in dash_warm["blocks"] if b["type"] == "card" and b.get("title") == "PAN-OS Firmware")
+    assert "async_refresh_url" not in pa_card_warm
+    assert "11.1.17-h1" in {r["label"]: r["value"] for r in pa_card_warm["rows"]}["Latest Patch in Branch"]
+
+    # 4. Schema-only XML (no detail-version) adds helpful note in Current PAN-OS row
+    ls.clear_lifecycle_cache()
+    monkeypatch.setenv("DISABLE_ONLINE_CHECKS", "1")
+    client2 = TestClient(create_app())
+    assert client2.post("/api/upload", files={"file": ("pa_schema.xml", SAMPLE_PA_XML, "text/xml")}).status_code == 200
+    dash_schema = client2.get("/api/pa/Dashboard").json()
+    pa_card_schema = next(b for b in dash_schema["blocks"] if b["type"] == "card" and b.get("title") == "PAN-OS Firmware")
+    schema_rows = {r["label"]: r["value"] for r in pa_card_schema["rows"]}
+    assert "XML schema version" in schema_rows["Current PAN-OS"]
+    assert "async_refresh_url" not in pa_card_schema
+
+
+def test_security_headers_and_no_store():
+    client = TestClient(create_app(), client=("127.0.0.1", 50000))
+    assert client.post("/api/upload", files={"file": ("running.xml", SAMPLE_PA_XML, "application/xml")}).status_code == 200
+
+    for path in ("/health", "/", "/api/pa/Dashboard"):
+        resp = client.get(path, follow_redirects=False)
+        assert resp.headers.get("x-content-type-options") == "nosniff"
+        assert resp.headers.get("x-frame-options") == "DENY"
+        assert resp.headers.get("referrer-policy") == "no-referrer"
+        assert "no-store" in resp.headers.get("cache-control", "")
+        assert resp.headers.get("pragma") == "no-cache"
+
+    https_resp = client.get("/health", headers={"X-Forwarded-Proto": "https"})
+    assert https_resp.status_code == 200
+    assert "max-age=31536000" in https_resp.headers.get("strict-transport-security", "")
+
+    static_resp = client.get("/static/css/theme.css")
+    assert static_resp.status_code == 200
+    assert static_resp.headers.get("x-content-type-options") == "nosniff"
+    assert "no-store" not in static_resp.headers.get("cache-control", "")
+
+
+def test_loopback_host_and_origin_protection():
+    client = TestClient(create_app(), client=("127.0.0.1", 50000))
+
+    assert client.get("/health", headers={"Host": "evil.example.com"}).status_code == 403
+    for allowed_host in ("127.0.0.1:8501", "localhost:8501", "[::1]:8501"):
+        assert client.get("/health", headers={"Host": allowed_host}).status_code == 200
+
+    assert client.post("/api/session/reset", headers={"Origin": "https://evil.example.com"}).status_code == 403
+    assert client.post("/api/session/reset", headers={"Origin": "http://127.0.0.1:8501"}).status_code == 200
+
+    proxied = client.get(
+        "/health",
+        headers={"X-Forwarded-For": "203.0.113.5", "Host": "fw.corp.internal"},
+    )
+    assert proxied.status_code == 200
+
+
+def test_session_ttl_default():
+    import backend.session_store as ss
+
+    assert ss.SESSION_TTL_SECONDS == 1800
+
+
+def test_where_used_search_fortigate_and_paloalto():
+    fg_conf = b"""#config-version=FGT60F-7.2.5-FW-build1517-230606:opmode=0:vdom=0
+config system global
+    set hostname "FGT-WU"
+end
+config system interface
+    edit "wan1"
+        set ip 203.0.113.10 255.255.255.0
+        set status up
+    next
+    edit "internal"
+        set ip 10.10.1.1 255.255.255.0
+        set status up
+    next
+end
+config firewall address
+    edit "LAN_SUBNET"
+        set subnet 10.10.1.0 255.255.255.0
+    next
+    edit "APP_SRV"
+        set subnet 10.10.1.50 255.255.255.255
+    next
+end
+config firewall addrgrp
+    edit "CORP_SERVERS"
+        set member "APP_SRV"
+    next
+    edit "ALL_INTERNAL"
+        set member "CORP_SERVERS" "LAN_SUBNET"
+    next
+end
+config firewall vip
+    edit "VIP_WEB"
+        set extip 203.0.113.50
+        set extintf "wan1"
+        set mappedip "10.10.1.50"
+    next
+end
+config firewall policy
+    edit 10
+        set name "Allow-Corp"
+        set srcintf "internal"
+        set dstintf "wan1"
+        set action accept
+        set srcaddr "ALL_INTERNAL"
+        set dstaddr "all"
+        set service "HTTPS"
+    next
+    edit 11
+        set name "Allow-VIP"
+        set srcintf "wan1"
+        set dstintf "internal"
+        set action accept
+        set srcaddr "all"
+        set dstaddr "VIP_WEB"
+        set service "HTTPS"
+    next
+end
+config router static
+    edit 1
+        set dst 10.10.1.0 255.255.255.0
+        set gateway 10.10.1.254
+        set device "internal"
+    next
+end
+"""
+    fg_client = TestClient(create_app(), client=("127.0.0.1", 50000))
+    assert fg_client.post("/api/upload", files={"file": ("fg_wu.conf", fg_conf, "text/plain")}).status_code == 200
+
+    # Summary exposes where_used_lookup block
+    fg_sum = fg_client.get("/api/fg/Summary").json()
+    assert any(b.get("type") == "where_used_lookup" and b.get("vendor") == "fg" for b in fg_sum["blocks"])
+
+    # Empty / unmatched query
+    empty_res = fg_client.post("/api/fg/where-used", json={"query": ""}).json()
+    assert empty_res["found"] is False
+    miss_res = fg_client.post("/api/fg/where-used", json={"query": "198.51.100.99"}).json()
+    assert miss_res["found"] is False
+
+    # IP 10.10.1.50 resolves through LAN_SUBNET + APP_SRV -> nested groups -> VIP_WEB -> both policies + route + interface
+    hit_res = fg_client.post("/api/fg/where-used", json={"query": "10.10.1.50"}).json()
+    assert hit_res["found"] is True
+    expanders = {b["title"].split(" (")[0]: b["blocks"][0] for b in hit_res["blocks"] if b["type"] == "expander"}
+    assert "Addresses & Groups" in expanders
+    addr_names = {r["Name"] for r in expanders["Addresses & Groups"]["rows"]}
+    assert {"LAN_SUBNET", "APP_SRV", "CORP_SERVERS", "ALL_INTERNAL"} <= addr_names
+    assert "NAT / VIP / IP Pools" in expanders
+    assert any(r["Name"] == "VIP_WEB" for r in expanders["NAT / VIP / IP Pools"]["rows"])
+    assert "Firewall / Security Policies" in expanders
+    pol_ids = {r["ID"] for r in expanders["Firewall / Security Policies"]["rows"]}
+    assert {"10", "11"} <= pol_ids
+    assert "Static Routes" in expanders
+    assert "VPN & Interfaces" in expanders
+
+    # Palo Alto Where-Used
+    pa_xml = b"""<?xml version="1.0"?>
+<config version="10.2.0">
+  <devices>
+    <entry name="localhost.localdomain">
+      <deviceconfig><system><hostname>PA-WU</hostname></system></deviceconfig>
+      <network>
+        <interface>
+          <ethernet>
+            <entry name="ethernet1/1"><layer3><ip><entry name="10.0.0.1/24"/></ip></layer3></entry>
+          </ethernet>
+        </interface>
+        <virtual-router>
+          <entry name="default">
+            <interface><member>ethernet1/1</member></interface>
+            <routing-table><ip><static-route>
+              <entry name="To-LAN">
+                <destination>10.0.0.0/24</destination>
+                <interface>ethernet1/1</interface>
+                <nexthop><ip-address>10.0.0.254</ip-address></nexthop>
+              </entry>
+            </static-route></ip></routing-table>
+          </entry>
+        </virtual-router>
+      </network>
+      <vsys>
+        <entry name="vsys1">
+          <zone>
+            <entry name="trust"><network><layer3><member>ethernet1/1</member></layer3></network></entry>
+            <entry name="untrust"/>
+          </zone>
+          <address>
+            <entry name="LAN_NET"><ip-netmask>10.0.0.0/24</ip-netmask></entry>
+          </address>
+          <address-group>
+            <entry name="TRUST_GRP"><static><member>LAN_NET</member></static></entry>
+          </address-group>
+          <rulebase>
+            <security><rules>
+              <entry name="Allow-LAN">
+                <from><member>trust</member></from>
+                <to><member>untrust</member></to>
+                <source><member>TRUST_GRP</member></source>
+                <destination><member>any</member></destination>
+                <application><member>any</member></application>
+                <service><member>application-default</member></service>
+                <action>allow</action>
+              </entry>
+            </rules></security>
+            <nat><rules>
+              <entry name="Outbound-NAT">
+                <from><member>trust</member></from>
+                <to><member>untrust</member></to>
+                <source><member>TRUST_GRP</member></source>
+                <destination><member>any</member></destination>
+              </entry>
+            </nat>
+          </rulebase>
+        </entry>
+      </vsys>
+    </entry>
+  </devices>
+</config>
+"""
+    # Fix typo in closing nat tag before uploading
+    pa_xml = pa_xml.replace(b"</nat>\n          </rulebase>", b"</rules></nat>\n          </rulebase>")
+    pa_client = TestClient(create_app(), client=("127.0.0.1", 50000))
+    assert pa_client.post("/api/upload", files={"file": ("pa_wu.xml", pa_xml, "application/xml")}).status_code == 200
+
+    pa_dash = pa_client.get("/api/pa/Dashboard").json()
+    assert any(b.get("type") == "where_used_lookup" and b.get("vendor") == "pa" for b in pa_dash["blocks"])
+
+    pa_hit = pa_client.post("/api/pa/where-used", json={"query": "10.0.0.42"}).json()
+    assert pa_hit["found"] is True
+    pa_exp = {b["title"].split(" (")[0]: b["blocks"][0] for b in pa_hit["blocks"] if b["type"] == "expander"}
+    assert {"LAN_NET", "TRUST_GRP"} <= {r["Name"] for r in pa_exp["Addresses & Groups"]["rows"]}
+    assert any(r["Name"] == "Allow-LAN" for r in pa_exp["Firewall / Security Policies"]["rows"])
+    assert any(r["Name"] == "Outbound-NAT" for r in pa_exp["NAT / VIP / IP Pools"]["rows"])
+    assert any(r["Name"] == "To-LAN" for r in pa_exp["Static Routes"]["rows"])
+
+
+def test_site_to_site_vpn_inspector_fortigate_and_paloalto():
+    fg_vpn_conf = b"""#config-version=FGT60F-7.2.5-FW-build1517-230606:opmode=0:vdom=0
+config system global
+    set hostname "FGT-VPN"
+end
+config system interface
+    edit "wan1"
+        set ip 203.0.113.10 255.255.255.0
+        set status up
+    next
+    edit "lan"
+        set ip 10.1.0.1 255.255.255.0
+        set status up
+    next
+    edit "to-hq"
+        set type tunnel
+        set interface "wan1"
+    next
+    edit "to-broken"
+        set type tunnel
+        set interface "wan1"
+    next
+end
+config vpn ipsec phase1-interface
+    edit "to-hq"
+        set interface "wan1"
+        set ike-version 2
+        set peertype any
+        set proposal aes256-sha256
+        set dhgrp 14
+        set remote-gw 198.51.100.10
+    next
+    edit "to-broken"
+        set interface "wan1"
+        set ike-version 1
+        set proposal 3des-sha1
+        set dhgrp 2
+        set remote-gw 198.51.100.20
+    next
+end
+config vpn ipsec phase2-interface
+    edit "to-hq-p2"
+        set phase1name "to-hq"
+        set proposal aes256-sha256
+        set dhgrp 14
+        set src-subnet 10.1.0.0 255.255.255.0
+        set dst-subnet 10.2.0.0 255.255.255.0
+    next
+end
+config router static
+    edit 1
+        set dst 10.2.0.0 255.255.255.0
+        set device "to-hq"
+    next
+end
+config firewall policy
+    edit 1
+        set name "HQ-Out"
+        set srcintf "lan"
+        set dstintf "to-hq"
+        set action accept
+        set srcaddr "all"
+        set dstaddr "all"
+        set service "ALL"
+        set nat disable
+    next
+    edit 2
+        set name "Broken-NAT"
+        set srcintf "lan"
+        set dstintf "to-broken"
+        set action accept
+        set srcaddr "all"
+        set dstaddr "all"
+        set service "ALL"
+        set nat enable
+    next
+end
+"""
+    fg_client = TestClient(create_app(), client=("127.0.0.1", 50000))
+    assert fg_client.post("/api/upload", files={"file": ("fg_vpn.conf", fg_vpn_conf, "text/plain")}).status_code == 200
+    fg_vpn = fg_client.get("/api/fg/VPN").json()
+    tabs = fg_vpn["blocks"][0]["tabs"]
+    insp_tab = next(t for t in tabs if t["label"] == "Site-to-Site Inspector")
+    overview_tbl = next(b for b in insp_tab["blocks"] if b["type"] == "table")
+    assert overview_tbl["legend"]  # Mandatory UX rule
+    by_tun = {r["Tunnel"]: (r, overview_tbl["row_classes"][i]) for i, r in enumerate(overview_tbl["rows"])}
+    assert by_tun["to-hq"][0]["Status"] == "Healthy"
+    assert by_tun["to-hq"][1] == "row-success"
+    assert by_tun["to-broken"][1] == "row-danger"
+    assert "No Phase 2" in by_tun["to-broken"][0]["Findings"]
+    assert "No active static route" in by_tun["to-broken"][0]["Findings"]
+    assert "NAT is enabled" in by_tun["to-broken"][0]["Findings"]
+    assert "IKEv1" in by_tun["to-broken"][0]["Findings"]
+
+    # Palo Alto IPSec Inspector
+    pa_vpn_xml = b"""<?xml version="1.0"?>
+<config version="10.2.0">
+  <devices>
+    <entry name="localhost.localdomain">
+      <deviceconfig><system><hostname>PA-VPN</hostname></system></deviceconfig>
+      <network>
+        <interface>
+          <ethernet>
+            <entry name="ethernet1/1"><layer3><ip><entry name="203.0.113.10/24"/></ip></layer3></entry>
+          </ethernet>
+          <tunnel><units>
+            <entry name="tunnel.1"><ip><entry name="169.254.1.1/30"/></ip></entry>
+          </units></tunnel>
+        </interface>
+        <ike>
+          <crypto-profiles>
+            <ike-crypto-profiles>
+              <entry name="IKE-AES256">
+                <encryption><member>aes-256-cbc</member></encryption>
+                <hash><member>sha256</member></hash>
+                <dh-group><member>group14</member></dh-group>
+                <lifetime><hours>8</hours></lifetime>
+              </entry>
+            </ike-crypto-profiles>
+            <ipsec-crypto-profiles>
+              <entry name="IPSEC-AES256">
+                <esp><encryption><member>aes-256-gcm</member></encryption><authentication><member>sha256</member></authentication></esp>
+                <dh-group>group14</dh-group>
+                <lifetime><hours>1</hours></lifetime>
+              </entry>
+            </ipsec-crypto-profiles>
+          </crypto-profiles>
+          <gateway>
+            <entry name="GW-Branch">
+              <protocol><version>ikev2</version><ikev2><ike-crypto-profile>IKE-AES256</ike-crypto-profile></ikev2></protocol>
+              <local-address><interface>ethernet1/1</interface><ip>203.0.113.10</ip></local-address>
+              <peer-address><ip>198.51.100.50</ip></peer-address>
+              <authentication><pre-shared-key><key>secret</key></pre-shared-key></authentication>
+            </entry>
+          </gateway>
+        </ike>
+        <tunnel>
+          <ipsec>
+            <entry name="Tun-Branch">
+              <tunnel-interface>tunnel.1</tunnel-interface>
+              <auto-key>
+                <ike-gateway><entry name="GW-Branch"/></ike-gateway>
+                <ipsec-crypto-profile>IPSEC-AES256</ipsec-crypto-profile>
+              </auto-key>
+            </entry>
+          </ipsec>
+        </tunnel>
+        <virtual-router>
+          <entry name="default">
+            <interface><member>ethernet1/1</member><member>tunnel.1</member></interface>
+            <routing-table><ip><static-route>
+              <entry name="To-Branch">
+                <destination>172.16.20.0/24</destination>
+                <interface>tunnel.1</interface>
+              </entry>
+            </static-route></ip></routing-table>
+          </entry>
+        </virtual-router>
+      </network>
+      <vsys>
+        <entry name="vsys1">
+          <zone>
+            <entry name="trust"><network><layer3><member>ethernet1/1</member></layer3></network></entry>
+            <entry name="vpn-zone"><network><layer3><member>tunnel.1</member></layer3></network></entry>
+          </zone>
+          <rulebase><security><rules>
+            <entry name="Allow-VPN">
+              <from><member>trust</member></from>
+              <to><member>vpn-zone</member></to>
+              <source><member>any</member></source>
+              <destination><member>any</member></destination>
+              <application><member>any</member></application>
+              <service><member>application-default</member></service>
+              <action>allow</action>
+            </entry>
+          </rules></security></rulebase>
+        </entry>
+      </vsys>
+    </entry>
+  </devices>
+</config>
+"""
+    pa_client = TestClient(create_app(), client=("127.0.0.1", 50000))
+    assert pa_client.post("/api/upload", files={"file": ("pa_vpn.xml", pa_vpn_xml, "application/xml")}).status_code == 200
+    pa_net = pa_client.get("/api/pa/Network").json()
+    net_tabs = pa_net["blocks"][0]["tabs"]
+    tun_tab = next(t for t in net_tabs if t["label"] == "IPSec & GRE Tunnels")
+    sub_tabs = tun_tab["blocks"][0]["tabs"]
+    pa_insp = next(t for t in sub_tabs if t["label"] == "IPSec Inspector")
+    pa_ov = next(b for b in pa_insp["blocks"] if b["type"] == "table")
+    assert pa_ov["legend"]
+    assert pa_ov["rows"][0]["Tunnel"] == "Tun-Branch"
+    assert pa_ov["rows"][0]["Status"] == "Healthy"
+    assert pa_ov["rows"][0]["Routes"] == "1"
+    assert pa_ov["rows"][0]["Allow Policies"] == "1"
+    assert pa_ov["row_classes"][0] == "row-success"
+
+
+def test_fortigate_ssl_to_ipsec_migration_assistant():
+    # 1. Config without SSL-VPN -> informational message
+    no_ssl_client = TestClient(create_app(), client=("127.0.0.1", 50000))
+    assert no_ssl_client.post("/api/upload", files={"file": ("fg_no_ssl.conf", SAMPLE_FG_CONF, "text/plain")}).status_code == 200
+    no_ssl_vpn = no_ssl_client.get("/api/fg/VPN").json()
+    no_ssl_tabs = no_ssl_vpn["blocks"][0]["tabs"]
+    mig_empty = next(t for t in no_ssl_tabs if t["label"] == "SSL-to-IPSec Migration")
+    assert mig_empty["blocks"][0]["type"] == "alert"
+    assert "No active SSL-VPN" in mig_empty["blocks"][0]["text"]
+
+    # 2. Config with SSL-VPN (Factory cert, Web-Mode bookmarks, SAML group, split-tunnel, ssl.root policy)
+    ssl_conf = b"""#config-version=FGT60F-7.2.8-FW-build1639-240315:opmode=0:vdom=0
+config system global
+    set hostname "FGT-SSLVPN"
+end
+config system interface
+    edit "wan1"
+        set ip 203.0.113.10 255.255.255.0
+        set status up
+    next
+    edit "lan"
+        set ip 10.10.1.1 255.255.255.0
+        set status up
+    next
+end
+config firewall address
+    edit "SSLVPN_POOL"
+        set type iprange
+        set start-ip 10.212.134.200
+        set end-ip 10.212.134.210
+    next
+    edit "CORP_LAN"
+        set subnet 10.10.1.0 255.255.255.0
+    next
+end
+config user saml
+    edit "azure-ad-saml"
+        set entity-id "https://vpn.example.com/saml"
+    next
+end
+config user group
+    edit "SAML_VPN_USERS"
+        set member "azure-ad-saml"
+    next
+end
+config vpn ssl web portal
+    edit "full-access"
+        set tunnel-mode enable
+        set web-mode enable
+        set ip-pools "SSLVPN_POOL"
+        set split-tunneling enable
+        set split-tunneling-routing-address "CORP_LAN"
+        config bookmarks
+            edit "Intranet"
+                set type http
+                set url "http://intranet.corp"
+            next
+        end
+    next
+end
+config vpn ssl settings
+    set status enable
+    set servercert "Fortinet_Factory"
+    set tunnel-ip-pools "SSLVPN_POOL"
+    set dns-server1 10.10.1.10
+    set port 443
+    set source-interface "wan1"
+    set default-portal "full-access"
+    config authentication-rule
+        edit 1
+            set groups "SAML_VPN_USERS"
+            set portal "full-access"
+        next
+    end
+end
+config firewall policy
+    edit 5
+        set name "SSL-to-LAN"
+        set srcintf "ssl.root"
+        set dstintf "lan"
+        set action accept
+        set srcaddr "SSLVPN_POOL"
+        set dstaddr "CORP_LAN"
+        set service "ALL"
+        set schedule "always"
+        set groups "SAML_VPN_USERS"
+        set nat disable
+    next
+end
+"""
+    ssl_client = TestClient(create_app(), client=("127.0.0.1", 50000))
+    assert ssl_client.post("/api/upload", files={"file": ("fg_ssl.conf", ssl_conf, "text/plain")}).status_code == 200
+    vpn_res = ssl_client.get("/api/fg/VPN").json()
+    tabs = vpn_res["blocks"][0]["tabs"]
+
+    # SSL-VPN Settings includes migration heads-up banner
+    ssl_set_tab = next(t for t in tabs if t["label"] == "SSL-VPN Settings")
+    assert any(b.get("type") == "alert" and "SSL-to-IPSec Migration" in b.get("text", "") for b in ssl_set_tab["blocks"])
+
+    mig_tab = next(t for t in tabs if t["label"] == "SSL-to-IPSec Migration")
+    blks = mig_tab["blocks"]
+    alerts = [b["text"] for b in blks if b.get("type") == "alert"]
+    assert any("Fortinet_Factory" in t for t in alerts)
+    assert any("Web-Mode / Bookmarks" in t for t in alerts)
+
+    pol_tbl = next(b for b in blks if b.get("type") == "table" and b.get("id") == "fg_ssl_mig_policies")
+    assert pol_tbl["legend"]
+    assert pol_tbl["rows"][0]["ID"] == "5"
+
+    code_blk = next(b for b in blks if b.get("type") == "code_block")
+    cli = code_blk["code"]
+    assert 'set ike-saml-server "azure-ad-saml"' in cli
+    assert "config vpn ipsec phase1-interface" in cli
+    assert "set ike-version 2" in cli
+    assert 'set ipv4-name "SSLVPN_POOL"' in cli
+    assert 'set ipv4-split-include "CORP_LAN"' in cli
+    assert "config vpn ipsec phase2-interface" in cli
+    assert "config firewall policy" in cli
+    assert 'set srcintf "RA-IPSec-IKEv2"' in cli
+
+
 
 
 

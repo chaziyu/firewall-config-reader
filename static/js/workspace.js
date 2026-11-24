@@ -1,9 +1,10 @@
 /* static/js/workspace.js — Declarative block renderer + sidebar navigation + policy matchers */
 
 (function () {
-  function badgeEl(text, variant) {
+  function badgeEl(text, variant, id) {
     const span = document.createElement("span");
     span.className = `fw-badge fw-badge-${variant || "muted"}`;
+    if (id) span.id = id;
     span.textContent = text;
     return span;
   }
@@ -45,7 +46,7 @@
           right.style.gap = "8px";
           right.style.flexWrap = "wrap";
           for (const b of blk.badges) {
-            right.appendChild(badgeEl(b.text, b.variant));
+            right.appendChild(badgeEl(b.text, b.variant, b.id));
           }
           card.appendChild(right);
         }
@@ -90,6 +91,8 @@
       case "card": {
         const card = document.createElement("div");
         card.className = "fw-card";
+        if (blk.id) card.id = blk.id;
+        let subtitleEl = null;
         if (blk.title || blk.badge) {
           const head = document.createElement("div");
           head.className = "fw-card-flex";
@@ -106,6 +109,7 @@
             const s = document.createElement("div");
             s.className = "fw-caption";
             s.textContent = blk.subtitle;
+            subtitleEl = s;
             left.appendChild(s);
           }
           head.appendChild(left);
@@ -132,6 +136,31 @@
             }
             card.appendChild(row);
           }
+        }
+        if (blk.async_refresh_url) {
+          fetch(blk.async_refresh_url)
+            .then((res) => (res.ok ? res.json() : null))
+            .then((data) => {
+              if (!data || !data.card || !card.isConnected) return;
+              const freshCard = renderBlock(data.card);
+              card.replaceWith(freshCard);
+              if (blk.async_badge_id && data.badge) {
+                const oldBadge = document.getElementById(blk.async_badge_id);
+                if (oldBadge && oldBadge.isConnected) {
+                  oldBadge.replaceWith(
+                    badgeEl(data.badge.text, data.badge.variant, data.badge.id || blk.async_badge_id)
+                  );
+                }
+              }
+            })
+            .catch(() => {
+              if (subtitleEl && card.isConnected && subtitleEl.textContent) {
+                subtitleEl.textContent = subtitleEl.textContent.replace(
+                  /Fetching live data…\s*\(([^)]+)\)/,
+                  "Offline snapshot ($1)"
+                );
+              }
+            });
         }
         return card;
       }
@@ -304,6 +333,12 @@
 
       case "route_lookup":
         return renderRouteLookup(blk);
+
+      case "where_used_lookup":
+        return renderWhereUsedLookup(blk);
+
+      case "code_block":
+        return renderCodeBlock(blk);
 
       default:
         return document.createDocumentFragment();
@@ -574,6 +609,145 @@
 
     det.appendChild(body);
     return det;
+  }
+
+  function renderWhereUsedLookup(blk) {
+    const det = document.createElement("details");
+    det.className = "fw-expander";
+    const sum = document.createElement("summary");
+    sum.textContent = '🔎 Global IP / Object "Where-Used" Search';
+    det.appendChild(sum);
+
+    const body = document.createElement("div");
+    body.className = "fw-expander-body";
+
+    const intro = document.createElement("div");
+    intro.className = "fw-caption";
+    intro.style.marginBottom = "10px";
+    intro.textContent =
+      "Search any IP address, CIDR subnet, or object name to trace where it is referenced across address objects, nested groups, NAT/VIPs, policies, static routes, VPNs, and interfaces.";
+    body.appendChild(intro);
+
+    const grid = document.createElement("div");
+    grid.className = "fw-form-grid";
+    const queryInp = makeInputField("IP, CIDR, or Object Name", "e.g. 10.10.1.5, 10.10.1.0/24, or LAN_NET", "");
+    grid.appendChild(queryInp.div);
+    body.appendChild(grid);
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "fw-btn fw-btn-primary";
+    btn.textContent = "Search References";
+    body.appendChild(btn);
+
+    const resultBox = document.createElement("div");
+    resultBox.style.marginTop = "12px";
+    body.appendChild(resultBox);
+
+    const endpoint = blk.vendor === "pa" ? "/api/pa/where-used" : "/api/fg/where-used";
+
+    async function runSearch() {
+      resultBox.innerHTML = "";
+      const qVal = queryInp.el.value.trim();
+      if (!qVal) {
+        resultBox.appendChild(renderBlock({ type: "alert", variant: "error", text: "Please enter an IP address, CIDR subnet, or object name." }));
+        return;
+      }
+      btn.disabled = true;
+      try {
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query: qVal }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          resultBox.appendChild(renderBlock({ type: "alert", variant: "error", text: data.detail || "Search failed." }));
+          return;
+        }
+        for (const b of data.blocks || []) {
+          resultBox.appendChild(renderBlock(b));
+        }
+      } catch (err) {
+        resultBox.appendChild(renderBlock({ type: "alert", variant: "error", text: `Request failed: ${err.message}` }));
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    btn.addEventListener("click", runSearch);
+    queryInp.el.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        runSearch();
+      }
+    });
+
+    det.appendChild(body);
+    return det;
+  }
+
+  function renderCodeBlock(blk) {
+    const card = document.createElement("div");
+    card.className = "fw-card fw-code-card";
+
+    const head = document.createElement("div");
+    head.className = "fw-code-header";
+
+    const left = document.createElement("div");
+    if (blk.title) {
+      const t = document.createElement("div");
+      t.style.fontSize = "14px";
+      t.style.fontWeight = "700";
+      t.textContent = blk.title;
+      left.appendChild(t);
+    }
+    if (blk.subtitle) {
+      const s = document.createElement("div");
+      s.className = "fw-caption";
+      s.textContent = blk.subtitle;
+      left.appendChild(s);
+    }
+    head.appendChild(left);
+
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.className = "fw-btn fw-btn-sm";
+    copyBtn.textContent = "Copy CLI";
+    copyBtn.addEventListener("click", async () => {
+      const text = String(blk.code || "");
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(text);
+        } else {
+          const ta = document.createElement("textarea");
+          ta.value = text;
+          ta.style.position = "fixed";
+          ta.style.opacity = "0";
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand("copy");
+          ta.remove();
+        }
+        copyBtn.textContent = "Copied!";
+        setTimeout(() => {
+          copyBtn.textContent = "Copy CLI";
+        }, 1800);
+      } catch {
+        copyBtn.textContent = "Copy Failed";
+      }
+    });
+    head.appendChild(copyBtn);
+    card.appendChild(head);
+
+    const pre = document.createElement("pre");
+    pre.className = "fw-code-pre";
+    const code = document.createElement("code");
+    code.textContent = String(blk.code || "");
+    pre.appendChild(code);
+    card.appendChild(pre);
+
+    return card;
   }
 
   // ── Page Bootstrap ──────────────────────────────────────────

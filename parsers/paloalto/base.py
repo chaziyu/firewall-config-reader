@@ -70,8 +70,11 @@ class PaloAltoParser:
     def get_system_info(self) -> dict:
         sys_el = self.dev.find("deviceconfig/system") if self.dev is not None else None
         version = ""
+        has_detail_version = False
         if self.root is not None:
-            version = self.root.get("detail-version") or self.root.get("version") or ""
+            detail_ver = (self.root.get("detail-version") or "").strip()
+            has_detail_version = bool(detail_ver)
+            version = detail_ver or (self.root.get("version") or "").strip()
 
         def g(tag, default="-"):
             return _txt(sys_el, tag, default)
@@ -107,6 +110,7 @@ class PaloAltoParser:
             "ipv6_link_local": g("ipv6-link-local-address", "Unknown"),
             "ipv6_gateway": g("ipv6-default-gateway", ""),
             "software_version": version,
+            "software_version_exact": has_detail_version,
             "timezone": g("timezone", "-"),
             "adv_routing": adv_routing,
             "dup_ip": dup_ip,

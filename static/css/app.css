@@ -804,7 +804,6 @@ a {
   border-radius: 8px;
   overflow: auto;
   max-height: calc((100vh / var(--fw-zoom-factor, 0.92)) - 220px);
-  min-height: 240px;
   background: var(--fw-surface);
 }
 
@@ -827,9 +826,14 @@ a {
   text-align: left;
   padding: 10px 12px;
   border-bottom: 1.5px solid var(--fw-border-hover);
+  border-right: 1px solid var(--fw-border);
   white-space: nowrap;
   cursor: pointer;
   user-select: none;
+}
+
+.fw-table thead th:last-child {
+  border-right: none;
 }
 
 .fw-table thead th:hover {
@@ -838,12 +842,17 @@ a {
 
 .fw-table tbody td {
   padding: 8px 12px;
-  border-bottom: 1px solid var(--fw-border);
+  border-bottom: 1px solid var(--fw-border-hover);
+  border-right: 1px solid var(--fw-border);
   color: var(--fw-text);
   vertical-align: middle;
   max-width: 440px;
   word-break: normal;
   overflow-wrap: break-word;
+}
+
+.fw-table tbody td:last-child {
+  border-right: none;
 }
 
 .fw-table tbody td.fw-cell-nowrap {
@@ -856,8 +865,7 @@ a {
 }
 
 .fw-table tbody td.fw-cell-empty {
-  color: var(--fw-muted);
-  opacity: 0.42;
+  color: color-mix(in srgb, var(--fw-muted) 55%, transparent);
   user-select: none;
 }
 
@@ -869,12 +877,12 @@ a {
   background-color: rgba(148, 163, 184, 0.06);
 }
 
-.fw-table tbody tr.row-danger td  { background: var(--fw-row-danger-bg);  color: var(--fw-row-danger-text); }
-.fw-table tbody tr.row-warn td    { background: var(--fw-row-warn-bg);    color: var(--fw-row-warn-text); }
-.fw-table tbody tr.row-success td { background: var(--fw-row-success-bg); color: var(--fw-row-success-text); }
-.fw-table tbody tr.row-info td    { background: var(--fw-row-info-bg);    color: var(--fw-row-info-text); }
-.fw-table tbody tr.row-purple td  { background: var(--fw-row-purple-bg);  color: var(--fw-row-purple-text); }
-.fw-table tbody tr.row-muted td   { background: var(--fw-row-muted-bg);   color: var(--fw-row-muted-text); }
+.fw-table tbody tr.row-danger td  { background: var(--fw-row-danger-bg);  --fw-row-fg: var(--fw-row-danger-text);  color: var(--fw-row-fg); }
+.fw-table tbody tr.row-warn td    { background: var(--fw-row-warn-bg);    --fw-row-fg: var(--fw-row-warn-text);    color: var(--fw-row-fg); }
+.fw-table tbody tr.row-success td { background: var(--fw-row-success-bg); --fw-row-fg: var(--fw-row-success-text); color: var(--fw-row-fg); }
+.fw-table tbody tr.row-info td    { background: var(--fw-row-info-bg);    --fw-row-fg: var(--fw-row-info-text);    color: var(--fw-row-fg); }
+.fw-table tbody tr.row-purple td  { background: var(--fw-row-purple-bg);  --fw-row-fg: var(--fw-row-purple-text);  color: var(--fw-row-fg); }
+.fw-table tbody tr.row-muted td   { background: var(--fw-row-muted-bg);   --fw-row-fg: var(--fw-row-muted-text);   color: var(--fw-row-fg); }
 
 /* Distinct left-accent bars & hierarchy markers for semantic table rows */
 .fw-table tbody tr.row-danger td:first-child  { box-shadow: inset 3.5px 0 0 var(--fw-deny); }
@@ -886,7 +894,8 @@ a {
 
 .fw-table tbody tr.row-zone td {
   background: var(--fw-row-muted-bg);
-  color: var(--fw-row-muted-text);
+  --fw-row-fg: var(--fw-row-muted-text);
+  color: var(--fw-row-fg);
   font-weight: 600;
 }
 .fw-table tbody tr.row-zone td:first-child {
@@ -895,10 +904,15 @@ a {
 
 .fw-table tbody tr.row-sub td {
   background: var(--fw-row-purple-bg);
-  color: var(--fw-row-purple-text);
+  --fw-row-fg: var(--fw-row-purple-text);
+  color: var(--fw-row-fg);
 }
 .fw-table tbody tr.row-sub td:first-child {
   box-shadow: inset 3.5px 0 0 var(--fw-purple);
+}
+
+.fw-table tbody tr[class*="row-"] td.fw-cell-empty {
+  color: color-mix(in srgb, var(--fw-row-fg, var(--fw-muted)) 50%, transparent);
 }
 
 .fw-table-count {
@@ -1040,4 +1054,32 @@ a {
   margin: 0;
   color: var(--fw-muted);
   font-size: 13px;
+}
+
+/* ── Code / CLI Draft Block ───────────────────────────────────── */
+.fw-code-card {
+  padding: 14px 16px;
+}
+
+.fw-code-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.fw-code-pre {
+  margin: 0;
+  padding: 12px 14px;
+  background: var(--fw-bg);
+  border: 1px solid var(--fw-border);
+  border-radius: 8px;
+  font-family: var(--fw-font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fw-text);
+  overflow-x: auto;
+  max-height: 460px;
+  white-space: pre;
 }

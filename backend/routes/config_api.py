@@ -27,6 +27,28 @@ def _require_config_session(request: Request, expected_vendor: str) -> SessionDa
     return sess
 
 
+@router.get("/pa/lifecycle")
+def get_paloalto_lifecycle(request: Request):
+    from backend.lifecycle_service import (
+        build_paloalto_lifecycle_blocks,
+        evaluate_paloalto_lifecycle,
+    )
+
+    sess = _require_config_session(request, "Palo Alto")
+    try:
+        parsers = store.get_palo_alto_parsers(sess.content_hash or "", sess.raw_content or b"")
+        info = parsers["Dashboard"].get_system_info()
+        lifecycle = evaluate_paloalto_lifecycle(
+            info.get("software_version"),
+            is_exact_version=bool(info.get("software_version_exact", True)),
+            cache_only=False,
+        )
+        badge, card = build_paloalto_lifecycle_blocks(lifecycle)
+        return {"badge": badge, "card": card}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error checking PAN-OS lifecycle: {exc}") from exc
+
+
 @router.get("/pa/{section}")
 async def get_paloalto_section(section: str, request: Request):
     from backend.view_models.paloalto import build_paloalto_section
@@ -86,8 +108,27 @@ async def pa_policy_test(body: PaPolicyTestRequest, request: Request):
     return payload
 
 
+@router.get("/fg/lifecycle")
+def get_fortigate_lifecycle(request: Request):
+    from backend.lifecycle_service import (
+        build_fortigate_lifecycle_blocks,
+        evaluate_fortigate_lifecycle,
+    )
+
+    sess = _require_config_session(request, "FortiGate")
+    try:
+        fg = store.get_fortigate_parser(sess.content_hash or "", sess.raw_content or b"")
+        model = fg.get_model()
+        firmware = fg.get_firmware_version()
+        lifecycle = evaluate_fortigate_lifecycle(model, firmware, cache_only=False)
+        badge, card = build_fortigate_lifecycle_blocks(lifecycle)
+        return {"badge": badge, "card": card}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error checking FortiGate lifecycle: {exc}") from exc
+
+
 @router.get("/fg/{section}")
-async def get_fortigate_section(section: str, request: Request):
+def get_fortigate_section(section: str, request: Request):
     from backend.view_models.fortigate import build_fortigate_section
 
     sess = _require_config_session(request, "FortiGate")
@@ -303,6 +344,32 @@ async def pa_route_lookup(body: PaRouteLookupRequest, request: Request):
     parsers = store.get_palo_alto_parsers(sess.content_hash or "", sess.raw_content or b"")
     res = lookup_paloalto_route(parsers["Network"], body.dest_ip, body.virtual_router)
     return _build_route_lookup_response(res, "Palo Alto")
+
+
+class WhereUsedRequest(BaseModel):
+    query: str = ""
+
+
+@router.post("/fg/where-used")
+async def fg_where_used(body: WhereUsedRequest, request: Request):
+    from backend.where_used_service import build_where_used_blocks, search_fortigate_where_used
+
+    sess = _require_config_session(request, "FortiGate")
+    fg = store.get_fortigate_parser(sess.content_hash or "", sess.raw_content or b"")
+    res = search_fortigate_where_used(fg, body.query)
+    found, blocks = build_where_used_blocks(res)
+    return {"found": found, "blocks": blocks}
+
+
+@router.post("/pa/where-used")
+async def pa_where_used(body: WhereUsedRequest, request: Request):
+    from backend.where_used_service import build_where_used_blocks, search_paloalto_where_used
+
+    sess = _require_config_session(request, "Palo Alto")
+    parsers = store.get_palo_alto_parsers(sess.content_hash or "", sess.raw_content or b"")
+    res = search_paloalto_where_used(parsers, body.query)
+    found, blocks = build_where_used_blocks(res)
+    return {"found": found, "blocks": blocks}
 
 
 @router.get("/export/excel")

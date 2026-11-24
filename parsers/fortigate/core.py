@@ -72,10 +72,35 @@ class FortiGateParser(
 
         return "Unknown"
 
+    def get_model(self) -> str:
+        """Extract the FortiGate hardware/VM model code from config-version or serial prefix."""
+        m = re.search(r"config-version=([A-Za-z0-9_-]+?)-v?\d+\.\d+", self.content)
+        if m:
+            return m.group(1)
+
+        serial = self.get_serial_number()
+        if serial and serial != "Unknown":
+            sm = re.match(
+                r"^(FGVM\d*|FGT\d+[A-Z]|FG\d+[A-Z]|FWF\d+[A-Z])[A-Z0-9]{8,}$",
+                serial,
+                re.IGNORECASE,
+            )
+            if sm:
+                return sm.group(1).upper()
+            if len(serial) >= 14:
+                return serial[:6].upper()
+        return "Unknown"
+
     def get_firmware_version(self) -> str:
         m = re.search(r"config-version=\S+-(.+?)-FW", self.content)
         if not m:
             m = re.search(r"config-version=\S+?-([\w\.\-]+)", self.content)
+        return m.group(1) if m else "Unknown"
+
+    def get_firmware_branch(self) -> str:
+        """Extract major.minor FortiOS branch (e.g. '7.2' from '7.2.5')."""
+        fw = self.get_firmware_version()
+        m = re.search(r"(\d+\.\d+)", fw or "")
         return m.group(1) if m else "Unknown"
 
     def get_wan_ip(self) -> str:

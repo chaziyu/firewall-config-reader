@@ -6,6 +6,7 @@ In-memory cookie-backed session store, SHA-256 parser cache, and TSF extraction 
 from __future__ import annotations
 
 import hashlib
+import os
 import secrets
 import threading
 import time
@@ -17,7 +18,7 @@ from typing import Any
 from fastapi import Request, Response
 
 SESSION_COOKIE = "fw_session_id"
-SESSION_TTL_SECONDS = 2 * 3600  # 2 hours
+SESSION_TTL_SECONDS = int(os.environ.get("FW_SESSION_TTL_SECONDS", str(30 * 60)))  # 30 minutes
 MAX_SESSIONS = 24
 PARSER_CACHE_MAX = 16
 

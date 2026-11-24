@@ -22,6 +22,15 @@ from backend.exposure_check import (
     build_exposure_overview_blocks,
     find_fortigate_public_mgmt_exposure,
 )
+from backend.lifecycle_service import (
+    build_fortigate_lifecycle_blocks,
+    evaluate_fortigate_lifecycle,
+)
+from backend.ssl_to_ipsec_service import (
+    analyze_fortigate_ssl_to_ipsec,
+    build_ssl_to_ipsec_blocks,
+)
+from backend.vpn_inspector_service import build_vpn_inspector_blocks, inspect_fortigate_vpns
 
 _INTERNAL_ADDR_KEYS = {
     "network_obj",
@@ -104,6 +113,7 @@ def build_summary(parser: Any) -> dict[str, Any]:
     https_port = str(sys_settings.get("https_port") or "443")
     ssh_port = str(sys_settings.get("ssh_port") or "22")
     serial = _safe(parser.get_serial_number)
+    model = _safe(parser.get_model)
     firmware = _safe(parser.get_firmware_version)
     ha = _safe(parser.get_ha_config, {"enabled": False})
 
@@ -112,34 +122,35 @@ def build_summary(parser: Any) -> dict[str, Any]:
         if ha.get("enabled")
         else {"text": "Standalone", "variant": "muted"}
     )
+    lifecycle = evaluate_fortigate_lifecycle(model, firmware, cache_only=True)
+    lifecycle_badge, lifecycle_card = build_fortigate_lifecycle_blocks(lifecycle)
     exposure_findings = find_fortigate_public_mgmt_exposure(parser)
     exposure_badge, exposure_card = build_exposure_overview_blocks(exposure_findings)
     audit_result = run_fortigate_audit(parser)
     audit_badge, audit_expander = build_audit_overview_blocks(audit_result)
+
+    mgmt_item: dict[str, Any] = {"label": "Management IP", "value": mgmt_info.get("ip", "Not configured")}
+    if mgmt_info.get("sub"):
+        mgmt_item["sub"] = mgmt_info["sub"]
+
+    subtitle_parts = [f"Firmware {firmware}", f"S/N {serial}"]
+    if model and model != "Unknown":
+        subtitle_parts.insert(0, str(lifecycle.get("model_display") or model))
 
     blocks: list[dict[str, Any]] = [
         {
             "type": "hero",
             "eyebrow": "FortiGate Appliance",
             "title": str(hostname),
-            "subtitle": f"Firmware {firmware} · S/N {serial}",
-            "badges": [ha_badge, exposure_badge, audit_badge],
+            "subtitle": " · ".join(subtitle_parts),
+            "badges": [ha_badge, lifecycle_badge, exposure_badge, audit_badge],
         },
-    ]
-    if exposure_card is not None:
-        blocks.append(exposure_card)
-    blocks.append(audit_expander)
-
-    mgmt_item: dict[str, Any] = {"label": "Management IP", "value": mgmt_info.get("ip", "Not configured")}
-    if mgmt_info.get("sub"):
-        mgmt_item["sub"] = mgmt_info["sub"]
-
-    blocks.extend([
         {"type": "section_header", "title": "System Overview"},
         {
             "type": "kv_grid",
             "items": [
                 {"label": "Hostname", "value": hostname},
+                {"label": "Model", "value": lifecycle.get("model_display", model) if model != "Unknown" else "Unknown"},
                 mgmt_item,
                 {"label": "WAN IP / Netmask", "value": wan_ip},
                 {"label": "Admin Ports", "value": f"HTTPS {https_port} · SSH {ssh_port}", "sub": f"HTTP {http_port}"},
@@ -148,7 +159,12 @@ def build_summary(parser: Any) -> dict[str, Any]:
                 {"label": "Firmware Version", "value": firmware},
             ],
         },
-    ])
+        lifecycle_card,
+    ]
+    if exposure_card is not None:
+        blocks.append(exposure_card)
+    blocks.append({"type": "where_used_lookup", "vendor": "fg"})
+    blocks.append(audit_expander)
     return {"section": "Summary", "blocks": blocks}
 
 
@@ -845,13 +861,27 @@ def build_vpn(parser: Any) -> dict[str, Any]:
             },
             _table_block(auth_rules, "fg_ssl_auth_rules", title="Authentication / Portal Mapping"),
         ]
+        if str(settings.get("enabled", "enable")).lower() != "disable":
+            ssl_set_blocks.insert(
+                0,
+                {
+                    "type": "alert",
+                    "variant": "info",
+                    "text": "Planning a migration from SSL-VPN? Open the 'SSL-to-IPSec Migration' tab for a readiness audit, certificate check, and draft Dial-up IPSec IKEv2 CLI.",
+                },
+            )
+
+    inspector_blocks = build_vpn_inspector_blocks(inspect_fortigate_vpns(parser), "fg")
+    ssl_mig_blocks = build_ssl_to_ipsec_blocks(analyze_fortigate_ssl_to_ipsec(parser))
 
     tabs = [
+        {"label": "Site-to-Site Inspector", "blocks": inspector_blocks},
         {"label": "IPSec Tunnels", "blocks": ipsec_blocks},
         {"label": "IPSec Concentrator", "blocks": [_table_block(parser.parse_ipsec_concentrator(), "fg_ipsec_conc", empty_text="No IPSec concentrators configured.")]},
         {"label": "SSL-VPN Portals", "blocks": portal_blocks},
         {"label": "SSL-VPN Settings", "blocks": ssl_set_blocks},
         {"label": "SSL-VPN Clients", "blocks": [_table_block(parser.parse_ssl_clients(), "fg_ssl_clients", empty_text="No SSL-VPN client configurations found.")]},
+        {"label": "SSL-to-IPSec Migration", "blocks": ssl_mig_blocks},
     ]
     return {"section": "VPN", "blocks": [{"type": "tabs", "id": "fg_vpn_tabs", "tabs": tabs}]}
 
