@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from backend.audit_service import build_audit_overview_blocks, run_fortigate_audit
 from backend.exposure_check import (
     build_exposure_overview_blocks,
     find_fortigate_public_mgmt_exposure,
@@ -113,6 +114,8 @@ def build_summary(parser: Any) -> dict[str, Any]:
     )
     exposure_findings = find_fortigate_public_mgmt_exposure(parser)
     exposure_badge, exposure_card = build_exposure_overview_blocks(exposure_findings)
+    audit_result = run_fortigate_audit(parser)
+    audit_badge, audit_expander = build_audit_overview_blocks(audit_result)
 
     blocks: list[dict[str, Any]] = [
         {
@@ -120,11 +123,12 @@ def build_summary(parser: Any) -> dict[str, Any]:
             "eyebrow": "FortiGate Appliance",
             "title": str(hostname),
             "subtitle": f"Firmware {firmware} · S/N {serial}",
-            "badges": [ha_badge, exposure_badge],
+            "badges": [ha_badge, exposure_badge, audit_badge],
         },
     ]
     if exposure_card is not None:
         blocks.append(exposure_card)
+    blocks.append(audit_expander)
 
     mgmt_item: dict[str, Any] = {"label": "Management IP", "value": mgmt_info.get("ip", "Not configured")}
     if mgmt_info.get("sub"):
@@ -370,7 +374,13 @@ def build_network(parser: Any) -> dict[str, Any]:
         {"label": "IPAM", "blocks": [_table_block(parser.parse_ipam(), "fg_ipam", empty_text="No IPAM configuration found.")]},
         {"label": "FortiExtender", "blocks": [_table_block(parser.parse_fortiextender(), "fg_fortiext", empty_text="No FortiExtender configuration found.")]},
         {"label": "SD-WAN", "blocks": sdwan_blocks},
-        {"label": "Static Routes", "blocks": [_table_block(static_rows, "fg_static_routes", empty_text="No static routes configured.", row_class_fn=_dis_cls, legend=_route_legend, caption=f"{st_en} active · {len(static_rows) - st_en} disabled")]},
+        {
+            "label": "Static Routes",
+            "blocks": [
+                {"type": "route_lookup", "vendor": "fg"},
+                _table_block(static_rows, "fg_static_routes", empty_text="No static routes configured.", row_class_fn=_dis_cls, legend=_route_legend, caption=f"{st_en} active · {len(static_rows) - st_en} disabled"),
+            ],
+        },
         {"label": "Policy Routes", "blocks": [_table_block(pr_rows, "fg_policy_routes", empty_text="No policy routes configured.", row_class_fn=_dis_cls, legend=_route_legend, caption=f"{pr_en} active · {len(pr_rows) - pr_en} disabled")]},
         {"label": "RIP", "blocks": rip_blocks},
         {"label": "OSPF", "blocks": ospf_blocks},

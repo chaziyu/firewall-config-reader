@@ -302,6 +302,9 @@
       case "fg_policy_lookup":
         return renderFgPolicyLookup(blk);
 
+      case "route_lookup":
+        return renderRouteLookup(blk);
+
       default:
         return document.createDocumentFragment();
     }
@@ -438,7 +441,17 @@
     const dstI = makeSelectField("Destination Interface", blk.interfaces || ["any"]);
     const srcAddr = makeInputField("Source IP / Object", "e.g. 10.10.1.5 or any", "");
     const dstAddr = makeInputField("Destination IP / Object", "e.g. 8.8.8.8 or any", "");
-    const proto = makeSelectField("Protocol / Service", ["any", "TCP", "UDP", "ICMP", "HTTP", "HTTPS", "DNS", "SSH", "RDP", "SMTP", "FTP"]);
+    const proto = makeInputField("Protocol / Service", "e.g. HTTPS, tcp/443, any", "any");
+    const dlId = "fg_svc_datalist_" + Math.random().toString(36).slice(2, 8);
+    const dl = document.createElement("datalist");
+    dl.id = dlId;
+    for (const s of ["any", "HTTPS", "HTTP", "DNS", "SSH", "RDP", "ICMP", "TCP", "UDP", "tcp/443", "udp/53"]) {
+      const opt = document.createElement("option");
+      opt.value = s;
+      dl.appendChild(opt);
+    }
+    proto.el.setAttribute("list", dlId);
+    proto.div.appendChild(dl);
 
     [srcI, dstI, srcAddr, dstAddr, proto].forEach((f) => grid.appendChild(f.div));
     card.appendChild(grid);
@@ -465,7 +478,7 @@
             dst_iface: dstI.el.value,
             src_addr: srcAddr.el.value.trim(),
             dst_addr: dstAddr.el.value.trim(),
-            protocol: proto.el.value,
+            protocol: proto.el.value.trim() || "any",
           }),
         });
         const data = await res.json();
@@ -484,6 +497,83 @@
     });
 
     return card;
+  }
+
+  function renderRouteLookup(blk) {
+    const det = document.createElement("details");
+    det.className = "fw-expander";
+    const sum = document.createElement("summary");
+    sum.textContent = "🧭 Route Lookup (Longest Prefix Match)";
+    det.appendChild(sum);
+
+    const body = document.createElement("div");
+    body.className = "fw-expander-body";
+
+    const grid = document.createElement("div");
+    grid.className = "fw-form-grid";
+    const destIp = makeInputField("Destination IP", "e.g. 10.20.30.40 or 8.8.8.8", "");
+    grid.appendChild(destIp.div);
+
+    let vrSel = null;
+    if (blk.vendor === "pa") {
+      vrSel = makeSelectField("Virtual Router", blk.virtual_routers || ["all"]);
+      grid.appendChild(vrSel.div);
+    }
+    body.appendChild(grid);
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "fw-btn fw-btn-primary";
+    btn.textContent = "Lookup Route";
+    body.appendChild(btn);
+
+    const resultBox = document.createElement("div");
+    resultBox.style.marginTop = "12px";
+    body.appendChild(resultBox);
+
+    const endpoint = blk.vendor === "pa" ? "/api/pa/route-lookup" : "/api/fg/route-lookup";
+
+    async function runLookup() {
+      resultBox.innerHTML = "";
+      const ipVal = destIp.el.value.trim();
+      if (!ipVal) {
+        resultBox.appendChild(renderBlock({ type: "alert", variant: "error", text: "Please enter a Destination IP address." }));
+        return;
+      }
+      btn.disabled = true;
+      try {
+        const payload = { dest_ip: ipVal };
+        if (vrSel) payload.virtual_router = vrSel.el.value;
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          resultBox.appendChild(renderBlock({ type: "alert", variant: "error", text: data.detail || "Route lookup failed." }));
+          return;
+        }
+        for (const b of data.blocks || []) {
+          resultBox.appendChild(renderBlock(b));
+        }
+      } catch (err) {
+        resultBox.appendChild(renderBlock({ type: "alert", variant: "error", text: `Request failed: ${err.message}` }));
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    btn.addEventListener("click", runLookup);
+    destIp.el.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        runLookup();
+      }
+    });
+
+    det.appendChild(body);
+    return det;
   }
 
   // ── Page Bootstrap ──────────────────────────────────────────

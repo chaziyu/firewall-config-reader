@@ -443,6 +443,13 @@ class FortiGateParser(
                 vals = re.findall(r'"([^"]+)"', m.group(1))
                 return ", ".join(vals) if vals else m.group(1).strip()
 
+            has_profile = bool(
+                re.search(
+                    r"set\s+(?:utm-status\s+enable|(?:av-profile|webfilter-profile|dnsfilter-profile|ips-sensor|application-list|file-filter-profile|emailfilter-profile|waf-profile|profile-group)\s+)",
+                    body,
+                )
+            )
+
             rows.append(
                 {
                     "ID": policy_id,
@@ -457,6 +464,7 @@ class FortiGateParser(
                     "NAT": nat_m.group(1).capitalize() if nat_m else "-",
                     "Status": status_m.group(1).capitalize() if status_m else "Enable",
                     "Log": log_m.group(1).capitalize() if log_m else "-",
+                    "_has_profile": has_profile,
                 }
             )
         return rows
@@ -715,7 +723,24 @@ class FortiGateParser(
                         "Comment": comment_m.group(1) if comment_m else "-",
                     }
                 )
-        return {"categories": list(categories.keys()), "services": services}
+        groups = []
+        grp_block = self._extract_block("firewall service group")
+        if grp_block:
+            for entry in re.findall(
+                r'^\s*edit "([^"]+)"(.*?)^\s*next', grp_block, re.DOTALL | re.MULTILINE
+            ):
+                name, body = entry
+                member_m = re.search(r"set member (.*)", body)
+                comment_m = re.search(r'set comment "([^"]+)"', body)
+                members = re.findall(r'"([^"]+)"', member_m.group(1)) if member_m else []
+                groups.append(
+                    {
+                        "Name": name,
+                        "Members": ", ".join(members) if members else "-",
+                        "Comment": comment_m.group(1) if comment_m else "-",
+                    }
+                )
+        return {"categories": list(categories.keys()), "services": services, "groups": groups}
 
     def parse_schedules(self) -> list:
         rows = []

@@ -785,6 +785,307 @@ def test_paloalto_overview_public_mgmt_exposure():
     assert mgt_row["value"] == "HTTPS, SSH"
 
 
+def test_fortigate_policy_lookup_groups_vip_services_and_shadow():
+    fg_conf = b"""#config-version=FGT60F-7.2.5-FW-build1517-230606:opmode=0:vdom=0
+config system global
+    set hostname "FGT-LOOKUP-TEST"
+end
+config system interface
+    edit "internal"
+        set ip 10.10.0.1 255.255.0.0
+        set status up
+    next
+    edit "wan1"
+        set ip 203.0.113.1 255.255.255.0
+        set status up
+    next
+end
+config firewall address
+    edit "APP_SUBNET"
+        set subnet 10.10.20.0 255.255.255.0
+    next
+    edit "UNUSED_OBJ"
+        set subnet 192.168.99.0 255.255.255.0
+    next
+end
+config firewall addrgrp
+    edit "INNER_GRP"
+        set member "APP_SUBNET"
+    next
+    edit "OUTER_GRP"
+        set member "INNER_GRP"
+    next
+end
+config firewall vip
+    edit "WEB_VIP"
+        set extip 203.0.113.50
+        set mappedip "10.10.20.10"
+        set extintf "wan1"
+    next
+end
+config firewall service custom
+    edit "CUSTOM_APP_8443"
+        set tcp-portrange 8443
+    next
+end
+config firewall service group
+    edit "WEB_CUSTOM_GRP"
+        set member "HTTPS" "CUSTOM_APP_8443"
+    next
+end
+config firewall policy
+    edit 10
+        set name "Allow-VIP-Custom"
+        set srcintf "wan1"
+        set dstintf "internal"
+        set action accept
+        set srcaddr "all"
+        set dstaddr "WEB_VIP"
+        set service "WEB_CUSTOM_GRP"
+    next
+    edit 20
+        set name "Allow-Group-Outbound"
+        set srcintf "internal"
+        set dstintf "wan1"
+        set action accept
+        set srcaddr "OUTER_GRP"
+        set dstaddr "all"
+        set service "WEB_CUSTOM_GRP"
+        set av-profile "default"
+        set logtraffic all
+    next
+    edit 30
+        set name "Shadowed-Broad-Outbound"
+        set srcintf "internal"
+        set dstintf "wan1"
+        set action accept
+        set srcaddr "all"
+        set dstaddr "all"
+        set service "ALL"
+        set logtraffic disable
+    next
+end
+"""
+    client = TestClient(create_app())
+    assert client.post("/api/upload", files={"file": ("fg_adv.conf", fg_conf, "text/plain")}).status_code == 200
+
+    # 1. VIP destination + custom port via service group
+    vip_hit = client.post(
+        "/api/fg/policy-lookup",
+        json={
+            "src_iface": "wan1",
+            "dst_iface": "internal",
+            "src_addr": "198.51.100.5",
+            "dst_addr": "203.0.113.50",
+            "protocol": "tcp/8443",
+        },
+    )
+    assert vip_hit.status_code == 200
+    vip_data = vip_hit.json()
+    assert vip_data["matched"] is True
+    assert vip_data["blocks"][0]["title"] == "First Matching Policy: #10 — Allow-VIP-Custom"
+
+    # 2. Nested address group + service group (tcp/443 -> HTTPS) + shadowed rule detection
+    grp_hit = client.post(
+        "/api/fg/policy-lookup",
+        json={
+            "src_iface": "internal",
+            "dst_iface": "wan1",
+            "src_addr": "10.10.20.42",
+            "dst_addr": "8.8.8.8",
+            "protocol": "tcp/443",
+        },
+    )
+    assert grp_hit.status_code == 200
+    grp_data = grp_hit.json()
+    assert grp_data["matched"] is True
+    assert grp_data["blocks"][0]["title"] == "First Matching Policy: #20 — Allow-Group-Outbound"
+    assert any(b["type"] == "alert" and b["variant"] == "warn" and "1 subsequent shadowed" in b["text"] for b in grp_data["blocks"])
+    shadow_exp = next(b for b in grp_data["blocks"] if b["type"] == "expander")
+    assert shadow_exp["blocks"][0]["rows"][0]["ID"] == "30"
+
+
+def test_route_lookup_fortigate_and_paloalto():
+    fg_routes = b"""#config-version=FGT60F-7.2.5-FW-build1517-230606:opmode=0:vdom=0
+config system global
+    set hostname "FGT-RTR"
+end
+config system interface
+    edit "wan1"
+        set ip 203.0.113.2 255.255.255.0
+        set status up
+    next
+    edit "lan"
+        set ip 10.0.0.1 255.255.255.0
+        set status up
+    next
+end
+config router static
+    edit 1
+        set dst 0.0.0.0 0.0.0.0
+        set gateway 203.0.113.1
+        set device "wan1"
+        set distance 10
+    next
+    edit 2
+        set dst 10.20.0.0 255.255.0.0
+        set gateway 10.0.0.254
+        set device "lan"
+        set distance 10
+    next
+    edit 3
+        set dst 10.20.30.0 255.255.255.0
+        set gateway 10.0.0.253
+        set device "lan"
+        set distance 10
+    next
+end
+"""
+    fg_client = TestClient(create_app())
+    assert fg_client.post("/api/upload", files={"file": ("fg_rtr.conf", fg_routes, "text/plain")}).status_code == 200
+
+    # Invalid IP
+    bad = fg_client.post("/api/fg/route-lookup", json={"dest_ip": "not-an-ip"})
+    assert bad.status_code == 200
+    assert bad.json()["matched"] is False
+
+    # Static LPM: /24 beats /16 and /0
+    lpm = fg_client.post("/api/fg/route-lookup", json={"dest_ip": "10.20.30.55"})
+    assert lpm.status_code == 200
+    lpm_data = lpm.json()
+    assert lpm_data["matched"] is True
+    assert "10.20.30.0/24" in lpm_data["blocks"][0]["title"]
+    assert len(lpm_data["blocks"][2]["rows"]) == 3
+
+    # Connected /24 beats /0
+    conn = fg_client.post("/api/fg/route-lookup", json={"dest_ip": "10.0.0.99"})
+    assert conn.status_code == 200
+    assert "Connected" in conn.json()["blocks"][0]["badge"]["text"]
+
+    # Palo Alto VR Route Lookup
+    pa_routes = b"""<?xml version="1.0"?>
+<config version="10.2.0">
+  <devices>
+    <entry name="localhost.localdomain">
+      <deviceconfig><system><hostname>PA-RTR</hostname></system></deviceconfig>
+      <network>
+        <interface>
+          <ethernet>
+            <entry name="ethernet1/1">
+              <layer3><ip><entry name="192.168.10.1/24"/></ip></layer3>
+            </entry>
+          </ethernet>
+        </interface>
+        <virtual-router>
+          <entry name="default">
+            <interface><member>ethernet1/1</member></interface>
+            <routing-table>
+              <ip>
+                <static-route>
+                  <entry name="Default">
+                    <destination>0.0.0.0/0</destination>
+                    <interface>ethernet1/1</interface>
+                    <nexthop><ip-address>192.168.10.254</ip-address></nexthop>
+                    <metric>10</metric>
+                  </entry>
+                  <entry name="Corp-Specific">
+                    <destination>172.16.5.0/24</destination>
+                    <interface>ethernet1/1</interface>
+                    <nexthop><ip-address>192.168.10.2</ip-address></nexthop>
+                    <metric>10</metric>
+                  </entry>
+                </static-route>
+              </ip>
+            </routing-table>
+          </entry>
+        </virtual-router>
+      </network>
+    </entry>
+  </devices>
+</config>
+"""
+    pa_client = TestClient(create_app())
+    assert pa_client.post("/api/upload", files={"file": ("pa_rtr.xml", pa_routes, "text/xml")}).status_code == 200
+    pa_lpm = pa_client.post("/api/pa/route-lookup", json={"dest_ip": "172.16.5.12", "virtual_router": "default"})
+    assert pa_lpm.status_code == 200
+    pa_data = pa_lpm.json()
+    assert pa_data["matched"] is True
+    assert "172.16.5.0/24" in pa_data["blocks"][0]["title"]
+
+    pa_conn = pa_client.post("/api/pa/route-lookup", json={"dest_ip": "192.168.10.44", "virtual_router": "all"})
+    assert pa_conn.status_code == 200
+    assert pa_conn.json()["blocks"][0]["badge"]["text"] == "Connected"
+
+
+def test_quick_audit_and_pa_policy_legend():
+    # FortiGate with ANY-ANY unprofiled rule + weak 3des/sha1 VPN + strong aes256/sha256 VPN
+    fg_audit_conf = b"""#config-version=FGT60F-7.2.5-FW-build1517-230606:opmode=0:vdom=0
+config system global
+    set hostname "FGT-AUDIT"
+end
+config firewall address
+    edit "ORPHAN_NET"
+        set subnet 10.99.0.0 255.255.255.0
+    next
+end
+config firewall policy
+    edit 1
+        set name "Allow-All-Risky"
+        set srcintf "internal"
+        set dstintf "wan1"
+        set action accept
+        set srcaddr "all"
+        set dstaddr "all"
+        set service "ALL"
+        set logtraffic disable
+    next
+end
+config vpn ipsec phase1-interface
+    edit "VPN-WEAK"
+        set interface "wan1"
+        set ike-version 1
+        set proposal 3des-sha1
+        set dhgrp 2
+    next
+    edit "VPN-STRONG"
+        set interface "wan1"
+        set ike-version 2
+        set proposal aes256-sha256
+        set dhgrp 14
+    next
+end
+"""
+    fg_client = TestClient(create_app())
+    assert fg_client.post("/api/upload", files={"file": ("fg_audit.conf", fg_audit_conf, "text/plain")}).status_code == 200
+    fg_sum = fg_client.get("/api/fg/Summary").json()
+    fg_hero = next(b for b in fg_sum["blocks"] if b["type"] == "hero")
+    assert any(b["text"].startswith("Audit:") and b["variant"] == "deny" for b in fg_hero["badges"])
+    fg_audit_exp = next(b for b in fg_sum["blocks"] if b["type"] == "expander" and "Quick Security & Hygiene Audit" in b["title"])
+    fg_rows = fg_audit_exp["blocks"][1]["rows"]
+    cats = {r["Category"]: r for r in fg_rows}
+    assert "Overly Permissive ANY-ANY Allow Rules" in cats
+    assert "Allow Policies Missing Security Profiles" in cats
+    assert "Weak VPN Encryption / Hash (DES/3DES/MD5/SHA1)" in cats
+    # Ensure strong aes256-sha256 was NOT flagged as weak
+    assert "VPN-STRONG" not in cats["Weak VPN Encryption / Hash (DES/3DES/MD5/SHA1)"]["Details"]
+    assert "VPN-WEAK" in cats["Weak VPN Encryption / Hash (DES/3DES/MD5/SHA1)"]["Details"]
+    assert "Unused Address Objects (Best-Effort)" in cats
+
+    # Palo Alto Dashboard audit + Policy table legend check
+    pa_client = TestClient(create_app())
+    assert pa_client.post("/api/upload", files={"file": ("pa_audit.xml", SAMPLE_PA_XML, "text/xml")}).status_code == 200
+    pa_dash = pa_client.get("/api/pa/Dashboard").json()
+    pa_hero = next(b for b in pa_dash["blocks"] if b["type"] == "hero")
+    assert any(b["text"].startswith("Audit:") for b in pa_hero["badges"])
+    assert any(b["type"] == "expander" and "Quick Security & Hygiene Audit" in b["title"] for b in pa_dash["blocks"])
+
+    pa_pols = pa_client.get("/api/pa/Policies").json()
+    sec_tab = pa_pols["blocks"][0]["tabs"][0]
+    sec_table = next(b for b in sec_tab["blocks"] if b["type"] == "table")
+    assert isinstance(sec_table.get("legend"), list) and len(sec_table["legend"]) == 3
+
+
+
 
 
 

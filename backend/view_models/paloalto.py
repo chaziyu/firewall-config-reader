@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from backend.audit_service import build_audit_overview_blocks, run_paloalto_audit
 from backend.exposure_check import (
     build_exposure_overview_blocks,
     find_paloalto_public_mgmt_exposure,
@@ -68,6 +69,13 @@ def _policy_row_class(r: dict[str, Any]) -> str:
     return ""
 
 
+_PA_POLICY_LEGEND = [
+    {"label": "Enabled (default)", "variant": "default"},
+    {"label": "Disabled (red)", "variant": "danger"},
+    {"label": "Panorama (purple)", "variant": "purple"},
+]
+
+
 def _policy_block(rows: list[dict[str, Any]] | None, key: str, label: str) -> dict[str, Any]:
     if not rows:
         return {"type": "alert", "variant": "info", "text": f"No {label} configured."}
@@ -82,6 +90,7 @@ def _policy_block(rows: list[dict[str, Any]] | None, key: str, label: str) -> di
         caption=cap,
         export_filename=f"{key}.csv",
         row_class_fn=_policy_row_class,
+        legend=_PA_POLICY_LEGEND,
     )
 
 
@@ -90,6 +99,8 @@ def build_dashboard(
     parser: Any,
     network_parser: Any = None,
     device_parser: Any = None,
+    policies_parser: Any = None,
+    objects_parser: Any = None,
 ) -> dict[str, Any]:
     info = parser.get_system_info()
     ha = parser.get_ha_info()
@@ -106,6 +117,14 @@ def build_dashboard(
         dashboard_parser=parser,
     )
     exposure_badge, exposure_card = build_exposure_overview_blocks(exposure_findings)
+    audit_result = run_paloalto_audit(
+        {
+            "Policies": policies_parser,
+            "Objects": objects_parser,
+            "Network": network_parser,
+        }
+    )
+    audit_badge, audit_expander = build_audit_overview_blocks(audit_result)
 
     blocks: list[dict[str, Any]] = [
         {
@@ -123,11 +142,13 @@ def build_dashboard(
                     "variant": "info" if dup_ip == "Enable" else "muted",
                 },
                 exposure_badge,
+                audit_badge,
             ],
         },
     ]
     if exposure_card is not None:
         blocks.append(exposure_card)
+    blocks.append(audit_expander)
 
     blocks.extend([
         {"type": "section_header", "title": "Management & Network Identity"},
@@ -190,10 +211,9 @@ def build_dashboard(
 def build_policies(parser: Any) -> dict[str, Any]:
     zones = ["any"] + (parser.get_zones_list() if hasattr(parser, "get_zones_list") else [])
     intfs = ["any"] + (parser.get_interfaces_list() if hasattr(parser, "get_interfaces_list") else [])
-    legend = {"type": "legend", "items": ["Enabled (default)", "Disabled (red)", "Panorama (purple)"]}
 
     def _pol_tab(title: str, ptype: str | None, rows: list, key: str, label: str) -> dict[str, Any]:
-        blks: list[dict[str, Any]] = [legend]
+        blks: list[dict[str, Any]] = []
         if ptype:
             blks.append(
                 {
@@ -518,7 +538,14 @@ def build_network(parser: Any) -> dict[str, Any]:
         vr_blocks: list[dict[str, Any]] = [{"type": "alert", "variant": "info", "text": "No virtual routers."}]
     else:
         vr_summary = [{k: v for k, v in r.items() if k != "_vr_el"} for r in vrs]
-        vr_blocks = [_table_block(vr_summary, "pa_vr_list", export_filename="pa_virtual_routers.csv", caption=f"{len(vrs)} virtual routers")]
+        vr_blocks = [
+            {
+                "type": "route_lookup",
+                "vendor": "pa",
+                "virtual_routers": ["all"] + [str(v.get("Name", "default")) for v in vrs],
+            },
+            _table_block(vr_summary, "pa_vr_list", export_filename="pa_virtual_routers.csv", caption=f"{len(vrs)} virtual routers"),
+        ]
         for i, vr_row in enumerate(vrs):
             detail = parser.get_vr_detail(vr_row["_vr_el"])
             ecmp = detail.get("ecmp", {})
@@ -1036,6 +1063,8 @@ def build_paloalto_section(section: str, parsers: dict[str, Any]) -> dict[str, A
             parsers["Dashboard"],
             network_parser=parsers.get("Network"),
             device_parser=parsers.get("Device"),
+            policies_parser=parsers.get("Policies"),
+            objects_parser=parsers.get("Objects"),
         ),
         "Policies": lambda: build_policies(parsers["Policies"]),
         "Objects": lambda: build_objects(parsers["Objects"]),
