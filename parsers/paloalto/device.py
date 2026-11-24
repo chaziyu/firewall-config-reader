@@ -347,7 +347,7 @@ class PaloDeviceParser(PaloAltoParser):
     def get_admin_roles(self) -> list:
         mc = self._mgt_config()
         rows = []
-        if mc:
+        if mc is not None:
             for entry in mc.findall(".//custom/entry"):
                 rows.append({
                     "Name":        entry.get("name", "-"),
@@ -577,7 +577,8 @@ class PaloDeviceParser(PaloAltoParser):
     def get_log_settings_tables(self) -> dict:
         result = {}
         ls_dev    = self.dev.find("log-settings") if self.dev is not None else None
-        ls_shared = self._shared().find("log-settings") if self._shared() else None
+        shared    = self._shared()
+        ls_shared = shared.find("log-settings") if shared is not None else None
         for log_type in ["system","configuration","user-id","hip-match","globalprotect","iptag"]:
             rows = []
             for ls in [ls_dev, ls_shared]:
@@ -637,7 +638,7 @@ class PaloDeviceParser(PaloAltoParser):
         for entry in el.findall("entry"):
             proto_el = entry.find("protocol")
             proto = "PAP"
-            if proto_el:
+            if proto_el is not None:
                 for p in ["CHAP","PAP","PEAP-MSCHAPv2"]:
                     if proto_el.find(p) is not None or proto_el.find(p.lower()) is not None:
                         proto = p; break

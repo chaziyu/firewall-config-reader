@@ -53,7 +53,7 @@ async def lifespan(_app: FastAPI):
 def create_app() -> FastAPI:
     app = FastAPI(
         title="Firewall Config Reader",
-        version="2.4.2",
+        version="2.4.3",
         docs_url=None,
         redoc_url=None,
         lifespan=lifespan,

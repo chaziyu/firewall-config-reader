@@ -18,14 +18,21 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from backend.audit_service import build_audit_overview_blocks, run_fortigate_audit
+from backend.cert_inspector_service import (
+    build_cert_inspector_blocks,
+    build_cert_overview_blocks,
+    inspect_fortigate_certificates,
+)
 from backend.exposure_check import (
     build_exposure_overview_blocks,
     find_fortigate_public_mgmt_exposure,
 )
+from backend.hygiene_service import analyze_fortigate_hygiene, build_hygiene_blocks
 from backend.lifecycle_service import (
     build_fortigate_lifecycle_blocks,
     evaluate_fortigate_lifecycle,
 )
+from backend.posture_service import evaluate_fortigate_posture
 from backend.ssl_to_ipsec_service import (
     analyze_fortigate_ssl_to_ipsec,
     build_ssl_to_ipsec_blocks,
@@ -89,7 +96,7 @@ def _toggle_row(label: str, val: Any) -> dict[str, str]:
 
 
 # ── 1. Summary ───────────────────────────────────────────────────────────────
-def build_summary(parser: Any) -> dict[str, Any]:
+def build_summary(parser: Any, *, allow_probe: bool = False) -> dict[str, Any]:
     hostname = parser.get_hostname()
     try:
         dns = parser.get_dns()
@@ -125,9 +132,16 @@ def build_summary(parser: Any) -> dict[str, Any]:
     lifecycle = evaluate_fortigate_lifecycle(model, firmware, cache_only=True)
     lifecycle_badge, lifecycle_card = build_fortigate_lifecycle_blocks(lifecycle)
     exposure_findings = find_fortigate_public_mgmt_exposure(parser)
-    exposure_badge, exposure_card = build_exposure_overview_blocks(exposure_findings)
+    exposure_badge, exposure_card = build_exposure_overview_blocks(
+        exposure_findings,
+        allow_probe=allow_probe,
+        probe_endpoint="/api/fg/exposure-probe",
+    )
     audit_result = run_fortigate_audit(parser)
     audit_badge, audit_expander = build_audit_overview_blocks(audit_result)
+    cert_list = inspect_fortigate_certificates(parser)
+    cert_badge, cert_card = build_cert_overview_blocks(cert_list)
+    posture = evaluate_fortigate_posture(parser)
 
     mgmt_item: dict[str, Any] = {"label": "Management IP", "value": mgmt_info.get("ip", "Not configured")}
     if mgmt_info.get("sub"):
@@ -137,13 +151,17 @@ def build_summary(parser: Any) -> dict[str, Any]:
     if model and model != "Unknown":
         subtitle_parts.insert(0, str(lifecycle.get("model_display") or model))
 
+    hero_badges = [ha_badge, lifecycle_badge, exposure_badge, audit_badge]
+    if cert_badge is not None:
+        hero_badges.append(cert_badge)
+
     blocks: list[dict[str, Any]] = [
         {
             "type": "hero",
             "eyebrow": "FortiGate Appliance",
             "title": str(hostname),
             "subtitle": " · ".join(subtitle_parts),
-            "badges": [ha_badge, lifecycle_badge, exposure_badge, audit_badge],
+            "badges": hero_badges,
         },
         {"type": "section_header", "title": "System Overview"},
         {
@@ -157,13 +175,19 @@ def build_summary(parser: Any) -> dict[str, Any]:
                 {"label": "Primary DNS", "value": dns_primary, "sub": f"Secondary: {dns_secondary}"},
                 {"label": "Serial Number", "value": serial},
                 {"label": "Firmware Version", "value": firmware},
+                {"label": "Internet Connectivity", "value": posture["internet"], "sub": posture["internet_sub"]},
+                {"label": "Local Hard Disk", "value": posture["disk"], "sub": posture["disk_sub"]},
             ],
         },
         lifecycle_card,
     ]
     if exposure_card is not None:
         blocks.append(exposure_card)
+    if cert_card is not None:
+        blocks.append(cert_card)
     blocks.append({"type": "where_used_lookup", "vendor": "fg"})
+    blocks.append({"type": "packet_trace", "vendor": "fg"})
+    blocks.append({"type": "config_diff", "vendor": "fg"})
     blocks.append(audit_expander)
     return {"section": "Summary", "blocks": blocks}
 
@@ -478,6 +502,7 @@ def build_policy_objects(parser: Any) -> dict[str, Any]:
         {"label": "Traffic Shaping", "blocks": [_table_block(parser.parse_traffic_shaping(), "fg_traffic_shaping", empty_text="No traffic shapers found.")]},
         {"label": "Virtual Servers", "blocks": [_table_block(parser.parse_virtual_servers(), "fg_vservers", empty_text="No virtual servers found.")]},
         {"label": "Health Check", "blocks": [_table_block(parser.parse_health_check(), "fg_health_checks", empty_text="No health check monitors found.")]},
+        {"label": "Cleanup & Hygiene", "blocks": build_hygiene_blocks(analyze_fortigate_hygiene(parser), "fg")},
     ]
     return {"section": "Policy & Objects", "blocks": [{"type": "tabs", "id": "fg_po_tabs", "tabs": tabs}]}
 
@@ -1097,6 +1122,7 @@ def build_system(parser: Any) -> dict[str, Any]:
         {"label": "Settings", "blocks": settings_blocks},
         {"label": "HA", "blocks": ha_blocks},
         {"label": "SNMP", "blocks": snmp_blocks},
+        {"label": "Certificates", "blocks": build_cert_inspector_blocks(inspect_fortigate_certificates(parser), "fg")},
     ]
     return {"section": "System", "blocks": [{"type": "tabs", "id": "fg_sys_tabs", "tabs": tabs}]}
 
@@ -1172,9 +1198,9 @@ def build_log_settings(parser: Any) -> dict[str, Any]:
     return {"section": "Log & Report", "blocks": [{"type": "tabs", "id": "fg_log_tabs", "tabs": tabs}]}
 
 
-def build_fortigate_section(section: str, parser: Any) -> dict[str, Any]:
+def build_fortigate_section(section: str, parser: Any, *, allow_probe: bool = False) -> dict[str, Any]:
     builders = {
-        "Summary": lambda: build_summary(parser),
+        "Summary": lambda: build_summary(parser, allow_probe=allow_probe),
         "Interfaces": lambda: build_interfaces(parser),
         "Network": lambda: build_network(parser),
         "Policy & Objects": lambda: build_policy_objects(parser),

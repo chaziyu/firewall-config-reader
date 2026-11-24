@@ -162,6 +162,64 @@
               }
             });
         }
+        if (blk.probe_url) {
+          const probeBar = document.createElement("div");
+          probeBar.style.display = "flex";
+          probeBar.style.alignItems = "center";
+          probeBar.style.gap = "10px";
+          probeBar.style.flexWrap = "wrap";
+          probeBar.style.marginTop = "12px";
+
+          const probeBtn = document.createElement("button");
+          probeBtn.type = "button";
+          probeBtn.className = "fw-btn fw-btn-sm";
+          probeBtn.textContent = "Test Reachability (Local)";
+          probeBar.appendChild(probeBtn);
+
+          const probeHint = document.createElement("span");
+          probeHint.className = "fw-caption";
+          probeHint.textContent = "Sends a 5s TCP/TLS/SSH check from this machine to flagged public IP:port(s).";
+          probeBar.appendChild(probeHint);
+          card.appendChild(probeBar);
+
+          const probeResult = document.createElement("div");
+          probeResult.style.marginTop = "10px";
+          card.appendChild(probeResult);
+
+          probeBtn.addEventListener("click", async () => {
+            probeResult.innerHTML = "";
+            probeBtn.disabled = true;
+            probeBtn.textContent = "Testing…";
+            try {
+              const res = await fetch(blk.probe_url, { method: "POST" });
+              const data = await res.json();
+              if (!res.ok) {
+                probeResult.appendChild(
+                  renderBlock({ type: "alert", variant: "error", text: data.detail || "Reachability test failed." })
+                );
+                return;
+              }
+              for (const child of data.blocks || []) {
+                probeResult.appendChild(renderBlock(child));
+              }
+              if (data.open_count > 0 && blk.probe_badge_id) {
+                const heroBadge = document.getElementById(blk.probe_badge_id);
+                if (heroBadge && heroBadge.isConnected) {
+                  heroBadge.replaceWith(
+                    badgeEl(`Public Mgmt Reachable (${data.open_count})`, "deny", blk.probe_badge_id)
+                  );
+                }
+              }
+            } catch (err) {
+              probeResult.appendChild(
+                renderBlock({ type: "alert", variant: "error", text: `Probe request failed: ${err.message}` })
+              );
+            } finally {
+              probeBtn.disabled = false;
+              probeBtn.textContent = "Test Reachability (Local)";
+            }
+          });
+        }
         return card;
       }
 
@@ -339,6 +397,12 @@
 
       case "code_block":
         return renderCodeBlock(blk);
+
+      case "config_diff":
+        return renderConfigDiff(blk);
+
+      case "packet_trace":
+        return renderPacketTrace(blk);
 
       default:
         return document.createDocumentFragment();
@@ -750,6 +814,179 @@
     return card;
   }
 
+  function renderConfigDiff(blk) {
+    const det = document.createElement("details");
+    det.className = "fw-expander";
+    const sum = document.createElement("summary");
+    sum.textContent = "⚖️ Config Diff (Compare With Another Snapshot)";
+    det.appendChild(sum);
+
+    const body = document.createElement("div");
+    body.className = "fw-expander-body";
+
+    const intro = document.createElement("div");
+    intro.className = "fw-caption";
+    intro.style.marginBottom = "10px";
+    intro.textContent =
+      "Upload a second configuration snapshot (before/after maintenance or HA peer) to view structural changes across Policies, NAT, Static Routes, VPNs, and Interfaces.";
+    body.appendChild(intro);
+
+    const row = document.createElement("div");
+    row.style.display = "flex";
+    row.style.alignItems = "center";
+    row.style.gap = "10px";
+    row.style.flexWrap = "wrap";
+
+    const fileInp = document.createElement("input");
+    fileInp.type = "file";
+    fileInp.className = "fw-input";
+    fileInp.style.maxWidth = "340px";
+    fileInp.accept = blk.vendor === "pa" ? ".xml" : ".conf,.txt";
+    row.appendChild(fileInp);
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "fw-btn fw-btn-primary";
+    btn.textContent = "Compare Configs";
+    row.appendChild(btn);
+    body.appendChild(row);
+
+    const resultBox = document.createElement("div");
+    resultBox.style.marginTop = "12px";
+    body.appendChild(resultBox);
+
+    const endpoint = blk.vendor === "pa" ? "/api/pa/config-diff" : "/api/fg/config-diff";
+
+    btn.addEventListener("click", async () => {
+      resultBox.innerHTML = "";
+      if (!fileInp.files || !fileInp.files.length) {
+        resultBox.appendChild(renderBlock({ type: "alert", variant: "error", text: "Please select a comparison configuration file first." }));
+        return;
+      }
+      const fd = new FormData();
+      fd.append("file", fileInp.files[0]);
+      btn.disabled = true;
+      btn.textContent = "Comparing…";
+      try {
+        const res = await fetch(endpoint, { method: "POST", body: fd });
+        const data = await res.json();
+        if (!res.ok) {
+          resultBox.appendChild(renderBlock({ type: "alert", variant: "error", text: data.detail || "Config comparison failed." }));
+          return;
+        }
+        for (const child of data.blocks || []) {
+          resultBox.appendChild(renderBlock(child));
+        }
+      } catch (err) {
+        resultBox.appendChild(renderBlock({ type: "alert", variant: "error", text: `Request failed: ${err.message}` }));
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Compare Configs";
+      }
+    });
+
+    det.appendChild(body);
+    return det;
+  }
+
+  function renderPacketTrace(blk) {
+    const det = document.createElement("details");
+    det.className = "fw-expander";
+    const sum = document.createElement("summary");
+    sum.textContent = "🚦 End-to-End Packet Flow Simulator (Trace Packet)";
+    det.appendChild(sum);
+
+    const body = document.createElement("div");
+    body.className = "fw-expander-body";
+
+    const intro = document.createElement("div");
+    intro.className = "fw-caption";
+    intro.style.marginBottom = "10px";
+    intro.textContent =
+      "Traces a packet end-to-end across Ingress/RPF check, Pre-NAT/DNAT (VIP), Egress LPM Route, Security/Firewall Policy, and Outbound SNAT.";
+    body.appendChild(intro);
+
+    const grid = document.createElement("div");
+    grid.className = "fw-form-grid";
+    const srcIp = makeInputField("Source IP", "e.g. 10.10.1.5", "");
+    const dstIp = makeInputField("Destination IP", "e.g. 8.8.8.8", "");
+    const dstPort = makeInputField("Dest Port", "443", "443");
+    const proto = makeSelectField("Protocol", ["tcp", "udp", "icmp", "any"]);
+    grid.appendChild(srcIp.div);
+    grid.appendChild(dstIp.div);
+    grid.appendChild(dstPort.div);
+    grid.appendChild(proto.div);
+
+    let vrSel = null;
+    if (blk.vendor === "pa") {
+      vrSel = makeSelectField("Virtual Router", blk.virtual_routers || ["all"]);
+      grid.appendChild(vrSel.div);
+    }
+    body.appendChild(grid);
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "fw-btn fw-btn-primary";
+    btn.textContent = "Trace Packet";
+    body.appendChild(btn);
+
+    const resultBox = document.createElement("div");
+    resultBox.style.marginTop = "12px";
+    body.appendChild(resultBox);
+
+    const endpoint = blk.vendor === "pa" ? "/api/pa/packet-trace" : "/api/fg/packet-trace";
+
+    async function runTrace() {
+      resultBox.innerHTML = "";
+      const sVal = srcIp.el.value.trim();
+      const dVal = dstIp.el.value.trim();
+      if (!sVal || !dVal) {
+        resultBox.appendChild(renderBlock({ type: "alert", variant: "error", text: "Please enter both Source IP and Destination IP." }));
+        return;
+      }
+      btn.disabled = true;
+      try {
+        const payload = {
+          src_ip: sVal,
+          dst_ip: dVal,
+          dst_port: dstPort.el.value.trim() || "443",
+          protocol: proto.el.value,
+        };
+        if (vrSel) payload.virtual_router = vrSel.el.value;
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          resultBox.appendChild(renderBlock({ type: "alert", variant: "error", text: data.detail || "Packet trace failed." }));
+          return;
+        }
+        for (const child of data.blocks || []) {
+          resultBox.appendChild(renderBlock(child));
+        }
+      } catch (err) {
+        resultBox.appendChild(renderBlock({ type: "alert", variant: "error", text: `Request failed: ${err.message}` }));
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    btn.addEventListener("click", runTrace);
+    [srcIp.el, dstIp.el, dstPort.el].forEach((inp) => {
+      inp.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          runTrace();
+        }
+      });
+    });
+
+    det.appendChild(body);
+    return det;
+  }
+
   // ── Page Bootstrap ──────────────────────────────────────────
   document.addEventListener("DOMContentLoaded", () => {
     const contentEl = document.getElementById("fw-workspace-content");
@@ -810,6 +1047,51 @@
       resetBtn.addEventListener("click", async () => {
         await fetch("/api/session/reset", { method: "POST" });
         window.location.href = "/";
+      });
+    }
+
+    const exportReportBtn = document.getElementById("fw-export-report-btn");
+    if (exportReportBtn) {
+      exportReportBtn.addEventListener("click", async () => {
+        const origText = exportReportBtn.textContent;
+        exportReportBtn.disabled = true;
+        exportReportBtn.textContent = "Generating...";
+        try {
+          const res = await fetch("/api/export/report");
+          if (!res.ok) {
+            throw new Error(`Report export failed (${res.status})`);
+          }
+          const ctype = res.headers.get("Content-Type") || "";
+          if (ctype.includes("application/json")) {
+            const info = await res.json();
+            exportReportBtn.textContent = `✓ Saved: ${info.filename || "Report"}`;
+            exportReportBtn.title = info.path ? `Saved to ${info.path}` : "Saved to Downloads";
+            setTimeout(() => {
+              exportReportBtn.textContent = origText;
+              exportReportBtn.title = "Export Security & Health Audit Report (HTML / Print to PDF)";
+            }, 3500);
+            return;
+          }
+          const blob = await res.blob();
+          const disp = res.headers.get("Content-Disposition") || "";
+          const match = disp.match(/filename="?([^";]+)"?/i);
+          const filename = match ? match[1] : "firewall_audit_report.html";
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        } catch (err) {
+          alert(err && err.message ? err.message : "Failed to export audit report.");
+        } finally {
+          exportReportBtn.disabled = false;
+          if (exportReportBtn.textContent === "Generating...") {
+            exportReportBtn.textContent = origText;
+          }
+        }
       });
     }
 

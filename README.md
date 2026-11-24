@@ -12,20 +12,22 @@ Built with **FastAPI**, **Jinja2**, and **Vanilla JS/CSS** — with instant brow
 ## Key Features
 
 ### 1. Palo Alto Networks (PAN-OS `.xml`)
-* **Dashboard**: Appliance identity, management IPv4/IPv6 settings, software version, High Availability (Active-Passive / Active-Active) cluster overview, and interactive **Global IP / Object "Where-Used" Search** (resolving CIDR containment, nested address groups, NAT/Security rules, static routes, VPNs, and interfaces).
+* **Dashboard**: Appliance identity, management IPv4/IPv6 settings, software version, High Availability (Active-Passive / Active-Active) cluster overview, **Internet Connectivity & Local Disk** indicators, **Certificate Expiry Alerts**, **Public Management Exposure** (Critical vs. Warning severity grading + local-only live TCP/TLS/SSH-banner reachability probe), interactive **Global IP / Object "Where-Used" Search**, **End-to-End Packet Flow Simulator (Trace Packet)**, **Firewall-Aware Config Diff** (compare two snapshots), and **One-Click HTML / Print-to-PDF Audit Report**.
 * **Policies & Traffic Match Simulator**:
   * Interactive **Policy Match Tester** supporting 5-tuple + Zone/Interface/User evaluation across **Security**, **NAT**, **PBF**, **Decryption**, **Authentication**, and **DoS** rulebases.
+  * **Cleanup & Hygiene Analyzer**: Identifies unused address/service objects & groups, disabled rules, overly broad `any → any` allow rules, and expired one-time schedules.
   * Full inspection of Security, NAT, QoS, PBF, Decryption, Tunnel Inspection, App Override, Authentication, DoS Protection, and SD-WAN rulebases with color-coded indicators (`Enabled`, `Disabled`, `Panorama-pushed`).
 * **Objects**: Addresses, Address Groups, Application Groups, Services, Service Groups, Tags, Regions, Dynamic User Groups, Devices, GlobalProtect HIP Objects/Profiles, External Dynamic Lists (EDL), Custom Objects (Data Patterns, Spyware, Vulnerability, URL Categories), Security Profiles & Groups, Log Forwarding, Authentication, Decryption Profiles, SD-WAN Link Management, and Schedules.
 * **Network**: Ethernet / Aggregate / Sub-Interfaces, VLANs, Loopbacks, Tunnels, SD-WAN, Zones, Virtual Wires, Virtual Routers (Static Routes, Admin Distances, ECMP, BGP, and Longest-Prefix-Match Route Lookup), **IPSec Inspector** (all-in-one tunnel health check stitching IKE/crypto, tunnel interface/zone/VR, static routes, and security/NAT policies with misconfiguration flags), IPSec & GRE Tunnels, DHCP Servers/Relays, DNS Proxy, GlobalProtect Portals/Gateways/MDM/Clientless, QoS, and Network Profiles.
-* **Device**: General Setup, Management Interface & Services, Service Routes, Panorama, High Availability (Election, Link/Path Monitoring), Administrators, Admin Roles, Auth Profiles (RADIUS, LDAP, TACACS+, Kerberos, SAML, MFA), Certificates, Server Profiles, Log Settings, Session Timeouts, and User-ID.
+* **Device**: General Setup, Management Interface & Services, Service Routes, Panorama, High Availability (Election, Link/Path Monitoring), Administrators, Admin Roles, Auth Profiles (RADIUS, LDAP, TACACS+, Kerberos, SAML, MFA), **Certificate Expiry Inspector** (X.509 PEM CN/SAN/Expiry parsing), Server Profiles, Log Settings, Session Timeouts, and User-ID.
 
 ### 2. Fortinet FortiGate (FortiOS `.conf` / `.txt` / `.cfg`)
-* **Summary**: Hostname, Serial Number, Firmware Version, WAN IP/Netmask, Primary/Secondary DNS, HA cluster status, and interactive **Global IP / Object "Where-Used" Search** (resolving CIDR containment, IP ranges, VIPs/IP Pools, nested address groups, policies, static routes, VPNs, and interfaces).
+* **Summary**: Hostname, Serial Number, Firmware Version, WAN IP/Netmask, Primary/Secondary DNS, HA cluster status, **Internet Connectivity & Local Hard Disk (SSD vs. Diskless)** indicators, **Certificate Expiry Alerts**, **Public Management, Public VIP & WAN-Behind-NAT Exposure** (Critical vs. Warning severity + local-only live TCP/TLS/SSH-banner reachability probe), interactive **Global IP / Object "Where-Used" Search**, **End-to-End Packet Flow Simulator (Trace Packet)**, **Firewall-Aware Config Diff** (compare two snapshots), and **One-Click HTML / Print-to-PDF Audit Report**.
 * **Interfaces**: Hierarchical interface tree with visual row indicators for **Zones (muted)**, **Hardware / Aggregate Switches (blue)**, **Sub-interfaces / VLANs (purple)**, and **Disabled interfaces (red)**.
 * **Network**: IPAM, FortiExtender, SD-WAN (Zones, Members, Rules, Performance SLA), Static Routes (with Longest-Prefix-Match Route Lookup), Policy Routes, RIP, OSPF, BGP, Routing Objects (Prefix Lists, Route Maps, AS Path Lists), and Multicast (PIM).
 * **Policy & Objects + Policy Lookup Simulator**:
   * Interactive top-to-bottom **Policy Lookup Simulator** evaluating Source/Destination Interface, Source/Destination IP/CIDR/Object, and Protocol/Service with implicit deny detection.
+  * **Cleanup & Hygiene Analyzer**: Identifies unused custom address/service/VIP/IP Pool objects (with draft cleanup CLI), disabled policies, overly broad `all/ALL` rules, unlogged allow policies, and expired one-time schedules.
   * Firewall Policies, Proxy Policies, Auth Rules, Addresses (Subnet, IP Range, FQDN, Interface Subnet, Address Groups, Host Regex), Services, Schedules, Virtual IPs (VIP/DNAT), IP Pools, Protocol Options, Traffic Shaping, Virtual Servers, and Health Checks.
 * **Security Profiles**: Antivirus, Web Filter, DNS Filter, Application Control, IPS, File Filter, Email Filter, VoIP, WAF, SSL Inspection, Web Rating Overrides, and Web Profile Overrides.
 * **VPN**:
@@ -34,7 +36,7 @@ Built with **FastAPI**, **Jinja2**, and **Vanilla JS/CSS** — with instant brow
   * IPSec Phase 1 & Phase 2 Selectors, IPSec Concentrators, SSL-VPN Portals, SSL-VPN Settings, and SSL-VPN Clients.
 * **User & Auth**: Local Users, User Groups, Guest Management, LDAP Servers, RADIUS Servers, FSSO, FortiTokens, and Auth Portal Settings.
 * **WiFi & Switch**: Managed FortiAPs, SSIDs, FortiAP Profiles, WIDS Profiles, Managed FortiSwitches, Port Policies, and NAC Policies.
-* **System & Logs**: Administrators (`super_admin` highlighting), Admin Profiles, System Settings, High Availability, SNMP, Global/Local Log Settings, and Threat Weight scores.
+* **System & Logs**: Administrators (`super_admin` highlighting), Admin Profiles, System Settings, High Availability, SNMP, **Certificate Expiry Inspector** (X.509 PEM CN/SAN/Expiry parsing), Global/Local Log Settings, and Threat Weight scores.
 
 ### 3. Tech Support File (TSF) Explorer (`.zip` / `.tgz` / `.tar.gz`)
 * **Hardened Archive Extraction**: Screens against path traversal (Zip Slip), symlink escapes, deep nesting (>20 levels), oversized files, password-protected archives, and executable binaries (`.exe`, `.dll`, `.elf`, shell/PHP scripts).
@@ -58,8 +60,17 @@ firewall-config-reader/
 ├── backend/
 │   ├── __init__.py
 │   ├── auth.py                   # Optional password authentication (FW_PASSWORD)
+│   ├── cert_inspector_service.py # X.509 PEM certificate expiry & SAN/CN inspector
 │   ├── chat_service.py           # Gemini AI config summary builder & prompt engine
+│   ├── config_diff_service.py    # Firewall-aware structural config snapshot diff
+│   ├── exposure_check.py         # Public mgmt/VIP/WAN-NAT exposure + local TCP/TLS/SSH probe
+│   ├── hygiene_service.py        # Unused objects & rule/schedule hygiene analyzer
+│   ├── lifecycle_service.py      # FortiGate & PAN-OS hardware/firmware lifecycle evaluator
+│   ├── packet_trace_service.py   # End-to-end packet flow simulator (RPF, DNAT, LPM, Policy, SNAT)
 │   ├── policy_lookup_service.py  # FortiGate top-down 5-tuple policy match engine
+│   ├── posture_service.py        # Internet connectivity & local hard disk posture checks
+│   ├── report_export_service.py  # Standalone HTML / Print-to-PDF security audit report generator
+│   ├── route_lookup_service.py   # Longest-prefix-match route lookup (FG & PA)
 │   ├── session_store.py          # In-memory LRU session store & SHA-256 parser cache
 │   ├── ssl_to_ipsec_service.py   # FortiGate SSL-VPN -> Dial-up IPSec migration assistant
 │   ├── upload_service.py         # Upload filename, size, XXE, and magic-byte validation
@@ -67,7 +78,7 @@ firewall-config-reader/
 │   ├── where_used_service.py     # Global IP / CIDR / object reference search engine
 │   ├── routes/
 │   │   ├── chat_api.py           # GET/POST/DELETE /api/chat & POST /api/chat/key
-│   │   ├── config_api.py         # GET /api/pa/{section}, /api/fg/{section}, lookups & where-used
+│   │   ├── config_api.py         # Section APIs, lookups, where-used, diff, exposure probe
 │   │   ├── pages.py              # HTML routes: /, /login, /workspace, /tsf, /health
 │   │   ├── tsf_api.py            # TSF tree, search, file preview, and download APIs
 │   │   └── upload.py             # POST /api/upload, TSF progress polling, session reset

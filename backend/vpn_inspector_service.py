@@ -67,7 +67,7 @@ def inspect_fortigate_vpns(fg: Any) -> list[dict[str, Any]]:
     for p1 in phase1_list:
         tname = str(p1.get("name", "-"))
         rgw = str(p1.get("remote_gw", "-"))
-        is_dialup = rgw in ("-", "", "0.0.0.0") or str(p1.get("peertype", "")).lower() == "any"
+        is_dialup = rgw in ("-", "", "0.0.0.0")
         iface_row = iface_map.get(tname, {})
         zone = iface_to_zone.get(tname, "-")
         tun_ip = str(iface_row.get("IP/Netmask", "-")) if iface_row else "-"

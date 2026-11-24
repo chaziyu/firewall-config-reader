@@ -13,14 +13,21 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from backend.audit_service import build_audit_overview_blocks, run_paloalto_audit
+from backend.cert_inspector_service import (
+    build_cert_inspector_blocks,
+    build_cert_overview_blocks,
+    inspect_paloalto_certificates,
+)
 from backend.exposure_check import (
     build_exposure_overview_blocks,
     find_paloalto_public_mgmt_exposure,
 )
+from backend.hygiene_service import analyze_paloalto_hygiene, build_hygiene_blocks
 from backend.lifecycle_service import (
     build_paloalto_lifecycle_blocks,
     evaluate_paloalto_lifecycle,
 )
+from backend.posture_service import evaluate_paloalto_posture
 from backend.vpn_inspector_service import build_vpn_inspector_blocks, inspect_paloalto_vpns
 
 
@@ -106,6 +113,8 @@ def build_dashboard(
     device_parser: Any = None,
     policies_parser: Any = None,
     objects_parser: Any = None,
+    *,
+    allow_probe: bool = False,
 ) -> dict[str, Any]:
     info = parser.get_system_info()
     ha = parser.get_ha_info()
@@ -127,7 +136,11 @@ def build_dashboard(
         device_parser=device_parser,
         dashboard_parser=parser,
     )
-    exposure_badge, exposure_card = build_exposure_overview_blocks(exposure_findings)
+    exposure_badge, exposure_card = build_exposure_overview_blocks(
+        exposure_findings,
+        allow_probe=allow_probe,
+        probe_endpoint="/api/pa/exposure-probe",
+    )
     audit_result = run_paloalto_audit(
         {
             "Policies": policies_parser,
@@ -136,6 +149,30 @@ def build_dashboard(
         }
     )
     audit_badge, audit_expander = build_audit_overview_blocks(audit_result)
+    cert_list = inspect_paloalto_certificates(device_parser)
+    cert_badge, cert_card = build_cert_overview_blocks(cert_list)
+    posture = evaluate_paloalto_posture(
+        network_parser,
+        policies_parser=policies_parser,
+        dashboard_parser=parser,
+        device_parser=device_parser,
+    )
+
+    hero_badges = [
+        {
+            "text": f"Advanced Routing: {adv_routing}",
+            "variant": "allow" if adv_routing == "On" else "muted",
+        },
+        {
+            "text": f"Duplicate IP: {dup_ip}",
+            "variant": "info" if dup_ip == "Enable" else "muted",
+        },
+        lifecycle_badge,
+        exposure_badge,
+        audit_badge,
+    ]
+    if cert_badge is not None:
+        hero_badges.append(cert_badge)
 
     blocks: list[dict[str, Any]] = [
         {
@@ -143,19 +180,7 @@ def build_dashboard(
             "eyebrow": "PAN-OS Appliance",
             "title": hostname,
             "subtitle": f"PAN-OS {sw_version} · {timezone}",
-            "badges": [
-                {
-                    "text": f"Advanced Routing: {adv_routing}",
-                    "variant": "allow" if adv_routing == "On" else "muted",
-                },
-                {
-                    "text": f"Duplicate IP: {dup_ip}",
-                    "variant": "info" if dup_ip == "Enable" else "muted",
-                },
-                lifecycle_badge,
-                exposure_badge,
-                audit_badge,
-            ],
+            "badges": hero_badges,
         },
     ]
 
@@ -172,6 +197,8 @@ def build_dashboard(
                 {"label": "IPv6 Default GW", "value": info.get("ipv6_gateway", "") or "—"},
                 {"label": "Software Version", "value": sw_version},
                 {"label": "Timezone", "value": timezone},
+                {"label": "Internet Connectivity", "value": posture["internet"], "sub": posture["internet_sub"]},
+                {"label": "Local Hard Disk", "value": posture["disk"], "sub": posture["disk_sub"]},
             ],
         },
         {"type": "section_header", "title": "High Availability"},
@@ -216,14 +243,24 @@ def build_dashboard(
     blocks.append(lifecycle_card)
     if exposure_card is not None:
         blocks.append(exposure_card)
+    if cert_card is not None:
+        blocks.append(cert_card)
+    vr_names = ["all"]
+    if network_parser is not None and hasattr(network_parser, "get_virtual_routers"):
+        for vr in network_parser.get_virtual_routers() or []:
+            vname = str(vr.get("Name", "")).strip()
+            if vname and vname not in vr_names:
+                vr_names.append(vname)
     blocks.append({"type": "where_used_lookup", "vendor": "pa"})
+    blocks.append({"type": "packet_trace", "vendor": "pa", "virtual_routers": vr_names})
+    blocks.append({"type": "config_diff", "vendor": "pa"})
     blocks.append(audit_expander)
 
     return {"section": "Dashboard", "blocks": blocks}
 
 
 # ── 2. Policies ──────────────────────────────────────────────────────────────
-def build_policies(parser: Any) -> dict[str, Any]:
+def build_policies(parser: Any, objects_parser: Any = None) -> dict[str, Any]:
     zones = ["any"] + (parser.get_zones_list() if hasattr(parser, "get_zones_list") else [])
     intfs = ["any"] + (parser.get_interfaces_list() if hasattr(parser, "get_interfaces_list") else [])
 
@@ -252,6 +289,13 @@ def build_policies(parser: Any) -> dict[str, Any]:
         _pol_tab("Authentication", "auth", parser.get_auth_rules(), "pa_auth_rules", "Authentication rules"),
         _pol_tab("DoS Protection", "dos", parser.get_dos_rules(), "pa_dos_rules", "DoS rules"),
         _pol_tab("SD-WAN", None, parser.get_sdwan_rules(), "pa_sdwan_rules", "SD-WAN rules"),
+        {
+            "label": "Cleanup & Hygiene",
+            "blocks": build_hygiene_blocks(
+                analyze_paloalto_hygiene({"Policies": parser, "Objects": objects_parser}),
+                "pa",
+            ),
+        },
     ]
 
     return {"section": "Policies", "blocks": [{"type": "tabs", "id": "pa_policies_tabs", "tabs": tabs}]}
@@ -1038,7 +1082,9 @@ def build_device(parser: Any) -> dict[str, Any]:
         {
             "label": "Certificates",
             "blocks": [
-                {"type": "section_header", "title": "Certificates"},
+                {"type": "section_header", "title": "Certificate Expiry Inspector"},
+                *build_cert_inspector_blocks(inspect_paloalto_certificates(parser), "pa"),
+                {"type": "section_header", "title": "Certificates (PAN-OS Metadata)"},
                 _table_block(parser.get_certificates(), "pa_certs", empty_text="No certificates found.", export_filename="pa_certificates.csv"),
                 {"type": "section_header", "title": "SSL/TLS Service Profiles"},
                 _table_block(parser.get_ssl_tls_profiles(), "pa_ssl_tls", empty_text="No SSL/TLS profiles found.", export_filename="pa_ssl_tls_profiles.csv"),
@@ -1079,7 +1125,7 @@ def build_device(parser: Any) -> dict[str, Any]:
     return {"section": "Device", "blocks": [{"type": "tabs", "id": "pa_device_tabs", "tabs": tabs}]}
 
 
-def build_paloalto_section(section: str, parsers: dict[str, Any]) -> dict[str, Any]:
+def build_paloalto_section(section: str, parsers: dict[str, Any], *, allow_probe: bool = False) -> dict[str, Any]:
     builders = {
         "Dashboard": lambda: build_dashboard(
             parsers["Dashboard"],
@@ -1087,8 +1133,9 @@ def build_paloalto_section(section: str, parsers: dict[str, Any]) -> dict[str, A
             device_parser=parsers.get("Device"),
             policies_parser=parsers.get("Policies"),
             objects_parser=parsers.get("Objects"),
+            allow_probe=allow_probe,
         ),
-        "Policies": lambda: build_policies(parsers["Policies"]),
+        "Policies": lambda: build_policies(parsers["Policies"], objects_parser=parsers.get("Objects")),
         "Objects": lambda: build_objects(parsers["Objects"]),
         "Network": lambda: build_network(parsers["Network"], policies_parser=parsers.get("Policies")),
         "Device": lambda: build_device(parsers["Device"]),

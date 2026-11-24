@@ -8,7 +8,7 @@ from __future__ import annotations
 from pathlib import PurePath
 import re
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
@@ -56,7 +56,7 @@ async def get_paloalto_section(section: str, request: Request):
     sess = _require_config_session(request, "Palo Alto")
     try:
         parsers = store.get_palo_alto_parsers(sess.content_hash or "", sess.raw_content or b"")
-        return build_paloalto_section(section, parsers)
+        return build_paloalto_section(section, parsers, allow_probe=is_loopback_request(request))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
@@ -134,7 +134,7 @@ def get_fortigate_section(section: str, request: Request):
     sess = _require_config_session(request, "FortiGate")
     try:
         fg = store.get_fortigate_parser(sess.content_hash or "", sess.raw_content or b"")
-        return build_fortigate_section(section, fg)
+        return build_fortigate_section(section, fg, allow_probe=is_loopback_request(request))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
@@ -370,6 +370,202 @@ async def pa_where_used(body: WhereUsedRequest, request: Request):
     res = search_paloalto_where_used(parsers, body.query)
     found, blocks = build_where_used_blocks(res)
     return {"found": found, "blocks": blocks}
+
+
+@router.post("/fg/exposure-probe")
+def fg_exposure_probe(request: Request):
+    from backend.exposure_check import (
+        build_exposure_probe_blocks,
+        find_fortigate_public_mgmt_exposure,
+        probe_exposure_targets,
+    )
+
+    if not is_loopback_request(request):
+        raise HTTPException(
+            status_code=403,
+            detail="Live reachability probe is only available on direct local/desktop sessions.",
+        )
+    sess = _require_config_session(request, "FortiGate")
+    fg = store.get_fortigate_parser(sess.content_hash or "", sess.raw_content or b"")
+    findings = find_fortigate_public_mgmt_exposure(fg)
+    results = probe_exposure_targets(findings)
+    return build_exposure_probe_blocks(results)
+
+
+@router.post("/pa/exposure-probe")
+def pa_exposure_probe(request: Request):
+    from backend.exposure_check import (
+        build_exposure_probe_blocks,
+        find_paloalto_public_mgmt_exposure,
+        probe_exposure_targets,
+    )
+
+    if not is_loopback_request(request):
+        raise HTTPException(
+            status_code=403,
+            detail="Live reachability probe is only available on direct local/desktop sessions.",
+        )
+    sess = _require_config_session(request, "Palo Alto")
+    parsers = store.get_palo_alto_parsers(sess.content_hash or "", sess.raw_content or b"")
+    findings = find_paloalto_public_mgmt_exposure(
+        parsers["Network"],
+        device_parser=parsers.get("Device"),
+        dashboard_parser=parsers.get("Dashboard"),
+    )
+    results = probe_exposure_targets(findings)
+    return build_exposure_probe_blocks(results)
+
+
+def _parse_diff_upload(filename: str, content: bytes, expected_vendor: str) -> bytes:
+    from backend.upload_service import (
+        UploadValidationError,
+        sanitize_config_bytes,
+        validate_content,
+        validate_filename,
+    )
+
+    try:
+        ext, is_tsf = validate_filename(filename)
+        if is_tsf:
+            raise UploadValidationError("Please upload a configuration file (.xml, .conf, or .txt), not a TSF .zip.")
+        validate_content(content, is_tsf=False)
+    except UploadValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    upload_vendor = "Palo Alto" if ext == ".xml" else "FortiGate"
+    if upload_vendor != expected_vendor:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Expected a {expected_vendor} config file to compare against the active {expected_vendor} session.",
+        )
+    return sanitize_config_bytes(content, expected_vendor)
+
+
+@router.post("/fg/config-diff")
+def fg_config_diff(request: Request, file: UploadFile = File(...)):
+    from backend.config_diff_service import build_config_diff_blocks, diff_fortigate_configs
+    from parsers.fortigate import FortiGateParser
+
+    sess = _require_config_session(request, "FortiGate")
+    after_name = file.filename or "comparison.conf"
+    raw_bytes = file.file.read()
+    clean_bytes = _parse_diff_upload(after_name, raw_bytes, "FortiGate")
+    try:
+        after_fg = FortiGateParser(clean_bytes.decode("utf-8", errors="replace"))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to parse FortiGate comparison config: {exc}") from exc
+
+    before_fg = store.get_fortigate_parser(sess.content_hash or "", sess.raw_content or b"")
+    diff_res = diff_fortigate_configs(before_fg, after_fg)
+    return build_config_diff_blocks(diff_res, sess.filename or "Current Config", after_name)
+
+
+@router.post("/pa/config-diff")
+def pa_config_diff(request: Request, file: UploadFile = File(...)):
+    import xml.etree.ElementTree as ET
+    from backend.config_diff_service import build_config_diff_blocks, diff_paloalto_configs
+    from parsers.paloalto import (
+        PaloDashboardParser,
+        PaloDeviceParser,
+        PaloNetworkParser,
+        PaloObjectsParser,
+        PaloPoliciesParser,
+    )
+
+    sess = _require_config_session(request, "Palo Alto")
+    after_name = file.filename or "comparison.xml"
+    raw_bytes = file.file.read()
+    clean_bytes = _parse_diff_upload(after_name, raw_bytes, "Palo Alto")
+    try:
+        root = ET.fromstring(clean_bytes.lstrip(b"\xef\xbb\xbf"))
+        after_parsers = {
+            "Dashboard": PaloDashboardParser(root),
+            "Policies": PaloPoliciesParser(root),
+            "Objects": PaloObjectsParser(root),
+            "Network": PaloNetworkParser(root),
+            "Device": PaloDeviceParser(root),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to parse Palo Alto comparison XML: {exc}") from exc
+
+    before_parsers = store.get_palo_alto_parsers(sess.content_hash or "", sess.raw_content or b"")
+    diff_res = diff_paloalto_configs(before_parsers, after_parsers)
+    return build_config_diff_blocks(diff_res, sess.filename or "Current Config", after_name)
+
+
+class PacketTraceRequest(BaseModel):
+    src_ip: str = ""
+    dst_ip: str = ""
+    dst_port: str = "443"
+    protocol: str = "tcp"
+    virtual_router: str = "all"
+
+
+@router.post("/fg/packet-trace")
+def fg_packet_trace(body: PacketTraceRequest, request: Request):
+    from backend.packet_trace_service import build_packet_trace_blocks, trace_fortigate_packet
+
+    sess = _require_config_session(request, "FortiGate")
+    fg = store.get_fortigate_parser(sess.content_hash or "", sess.raw_content or b"")
+    trace = trace_fortigate_packet(fg, body.src_ip, body.dst_ip, body.dst_port, body.protocol)
+    return build_packet_trace_blocks(trace)
+
+
+@router.post("/pa/packet-trace")
+def pa_packet_trace(body: PacketTraceRequest, request: Request):
+    from backend.packet_trace_service import build_packet_trace_blocks, trace_paloalto_packet
+
+    sess = _require_config_session(request, "Palo Alto")
+    parsers = store.get_palo_alto_parsers(sess.content_hash or "", sess.raw_content or b"")
+    trace = trace_paloalto_packet(
+        parsers,
+        body.src_ip,
+        body.dst_ip,
+        body.dst_port,
+        body.protocol,
+        body.virtual_router,
+    )
+    return build_packet_trace_blocks(trace)
+
+
+@router.get("/export/report")
+def export_audit_report(request: Request):
+    from backend.excel_export import get_downloads_dir, unique_export_path
+    from backend.report_export_service import (
+        generate_fortigate_audit_report_html,
+        generate_paloalto_audit_report_html,
+    )
+    from backend.update_service import is_frozen_desktop_exe
+
+    sess = store.get_existing(request)
+    if not is_authenticated(sess):
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    if sess is None or not sess.raw_content or sess.vendor not in ("Palo Alto", "FortiGate"):
+        raise HTTPException(status_code=404, detail="No active firewall configuration loaded.")
+
+    fname = sess.filename or "firewall_config"
+    if sess.vendor == "Palo Alto":
+        parsers = store.get_palo_alto_parsers(sess.content_hash or "", sess.raw_content)
+        html_bytes = generate_paloalto_audit_report_html(parsers, fname)
+    else:
+        fg = store.get_fortigate_parser(sess.content_hash or "", sess.raw_content)
+        html_bytes = generate_fortigate_audit_report_html(fg, fname)
+
+    stem = PurePath(fname).stem
+    safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("_") or "firewall_config"
+    out_stem = f"{safe_stem}_audit_report"
+
+    if is_frozen_desktop_exe() and is_loopback_request(request):
+        dest = unique_export_path(get_downloads_dir(), out_stem, ".html")
+        dest.write_bytes(html_bytes)
+        return JSONResponse({"saved": True, "filename": dest.name, "path": str(dest)})
+
+    out_name = f"{out_stem}.html"
+    return Response(
+        content=html_bytes,
+        media_type="text/html; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{out_name}"'},
+    )
 
 
 @router.get("/export/excel")
