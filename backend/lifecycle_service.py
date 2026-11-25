@@ -30,7 +30,7 @@ _FORTINET_RSS_URL = "https://support.fortinet.com/rss/firmware.xml"
 _HTTP_TIMEOUT_SECONDS = 3.0
 _LIVE_CACHE_TTL_SECONDS = 86400
 _EOS_SOON_DAYS = 180
-_USER_AGENT = "FirewallConfigReader/2.4.4"
+_USER_AGENT = "FirewallConfigReader/2.4.5"
 
 _VARIANT_SUFFIXES = ("-POE", "-DSL", "-3G4G", "-5G", "-WIFI")
 _RSS_TITLE_RE = re.compile(r"^FortiOS\s+(\d+\.\d+\.\d+)$")

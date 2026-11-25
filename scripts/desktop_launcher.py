@@ -10,6 +10,7 @@ Performance optimizations:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import socket
 import sys
@@ -43,29 +44,235 @@ def _pick_port(preferred: int = DEFAULT_PORT) -> int:
     raise RuntimeError("Unable to bind a local loopback port for FastAPI.")
 
 
-def _compute_window_geometry(webview_module: Any) -> dict[str, Any]:
-    """Compute a centered initial window size and position fitted to the primary screen."""
-    screens = getattr(webview_module, "screens", None) or []
-    if not screens:
-        return {"width": 1280, "height": 800, "min_size": (860, 600)}
+def _get_windows_dpi_scale() -> float:
+    """Return the system Windows DPI scale factor (e.g. 1.25, 1.5) or 1.0."""
+    if sys.platform != "win32":
+        return 1.0
+    try:
+        import ctypes
 
-    primary = screens[0]
-    screen_w = int(getattr(primary, "width", 1440))
-    screen_h = int(getattr(primary, "height", 900))
-    screen_x = int(getattr(primary, "x", 0))
-    screen_y = int(getattr(primary, "y", 0))
+        get_dpi = getattr(ctypes.windll.user32, "GetDpiForSystem", None)
+        if get_dpi is None:
+            return 1.0
+        dpi = int(get_dpi())
+        return dpi / 96.0 if dpi > 0 else 1.0
+    except Exception:
+        return 1.0
 
-    width = max(1, min(1440, int(screen_w * 0.88)))
-    height = max(1, min(920, int(screen_h * 0.86)))
-    x = screen_x + max(0, (screen_w - width) // 2)
-    y = screen_y + max(0, (screen_h - height) // 2)
+
+def _window_state_path() -> Path:
+    """Return path to persisted desktop window size/maximized preference JSON."""
+    if sys.platform == "win32":
+        base = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
+    else:
+        base = Path.home() / ".config"
+    return base / "FirewallConfigReader" / "window_state.json"
+
+
+def _load_window_state(path: Path | None = None) -> dict[str, Any] | None:
+    """Load persisted logical window dimensions and maximized state, or None."""
+    target = path or _window_state_path()
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return None
+        w = data.get("width")
+        h = data.get("height")
+        maximized = data.get("maximized", False)
+        if (
+            isinstance(w, bool)
+            or isinstance(h, bool)
+            or not isinstance(w, int)
+            or not isinstance(h, int)
+            or not isinstance(maximized, bool)
+        ):
+            return None
+        if not (400 <= w <= 8192 and 300 <= h <= 4320):
+            return None
+        return {"width": w, "height": h, "maximized": maximized}
+    except Exception:
+        return None
+
+
+def _save_window_state(width: int, height: int, maximized: bool, path: Path | None = None) -> None:
+    """Persist logical window dimensions and maximized state to disk."""
+    try:
+        w = max(400, min(8192, int(width)))
+        h = max(300, min(4320, int(height)))
+        target = path or _window_state_path()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            json.dumps({"width": w, "height": h, "maximized": bool(maximized)}),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _get_windows_work_area() -> tuple[int, int, int, int] | None:
+    """Return primary monitor work area (left, top, width, height) in physical pixels."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        rect = wintypes.RECT()
+        ok = ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0)
+        if not ok:
+            return None
+        w = int(rect.right - rect.left)
+        h = int(rect.bottom - rect.top)
+        if w <= 0 or h <= 0:
+            return None
+        return int(rect.left), int(rect.top), w, h
+    except Exception:
+        return None
+
+
+def _center_native_window(window: Any) -> bool:
+    """Center the native Win32 window on its monitor's work area using physical pixels."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        native = getattr(window, "native", None)
+        handle = getattr(native, "Handle", None)
+        if handle is None:
+            return False
+        if hasattr(handle, "ToInt64"):
+            hwnd = int(handle.ToInt64())
+        elif hasattr(handle, "ToInt32"):
+            hwnd = int(handle.ToInt32())
+        else:
+            hwnd = int(handle)
+        if not hwnd:
+            return False
+
+        user32 = ctypes.windll.user32
+
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD),
+                ("rcMonitor", wintypes.RECT),
+                ("rcWork", wintypes.RECT),
+                ("dwFlags", wintypes.DWORD),
+            ]
+
+        user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+        user32.MonitorFromWindow.restype = wintypes.HMONITOR
+        hmon = user32.MonitorFromWindow(wintypes.HWND(hwnd), 1)
+        if not hmon:
+            return False
+
+        mi = MONITORINFO()
+        mi.cbSize = ctypes.sizeof(MONITORINFO)
+        if not user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+            return False
+
+        win_rect = wintypes.RECT()
+        if not user32.GetWindowRect(wintypes.HWND(hwnd), ctypes.byref(win_rect)):
+            return False
+
+        win_w = int(win_rect.right - win_rect.left)
+        win_h = int(win_rect.bottom - win_rect.top)
+        work_left = int(mi.rcWork.left)
+        work_top = int(mi.rcWork.top)
+        work_w = int(mi.rcWork.right - mi.rcWork.left)
+        work_h = int(mi.rcWork.bottom - mi.rcWork.top)
+        if win_w <= 0 or win_h <= 0 or work_w <= 0 or work_h <= 0:
+            return False
+
+        cx = work_left + max(0, (work_w - win_w) // 2)
+        cy = work_top + max(0, (work_h - win_h) // 2)
+        # SWP_NOSIZE (0x0001) | SWP_NOZORDER (0x0004) | SWP_NOACTIVATE (0x0010)
+        return bool(
+            user32.SetWindowPos(wintypes.HWND(hwnd), 0, cx, cy, 0, 0, 0x0001 | 0x0004 | 0x0010)
+        )
+    except Exception:
+        return False
+
+
+def _capture_and_save_window_state(window: Any, path: Path | None = None) -> None:
+    """Capture logical window size and maximized state from pywebview and persist it."""
+    try:
+        native = getattr(window, "native", None)
+        state_str = str(getattr(native, "WindowState", "")) if native is not None else ""
+        maximized = state_str.endswith("Maximized")
+        minimized = state_str.endswith("Minimized")
+        scale = float(getattr(native, "_scale", 0) or _get_windows_dpi_scale() or 1.0)
+        if scale <= 0:
+            scale = 1.0
+
+        logical_w: int | None = None
+        logical_h: int | None = None
+
+        if native is not None and (maximized or minimized):
+            bounds = getattr(native, "RestoreBounds", None)
+            if bounds is not None and getattr(bounds, "Width", 0) > 0 and getattr(bounds, "Height", 0) > 0:
+                logical_w = int(round(float(bounds.Width) / scale))
+                logical_h = int(round(float(bounds.Height) / scale))
+
+        if logical_w is None and native is not None:
+            nw = getattr(native, "Width", 0)
+            nh = getattr(native, "Height", 0)
+            if nw and nh:
+                logical_w = int(round(float(nw) / scale))
+                logical_h = int(round(float(nh) / scale))
+
+        if logical_w is None or logical_h is None:
+            logical_w = int(getattr(window, "width", 1280) or 1280)
+            logical_h = int(getattr(window, "height", 800) or 800)
+
+        _save_window_state(logical_w, logical_h, maximized=maximized and not minimized, path=path)
+    except Exception:
+        pass
+
+
+def _compute_window_geometry(
+    webview_module: Any,
+    saved_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compute logical window dimensions from work area and saved state."""
+    dpi_scale = _get_windows_dpi_scale()
+    work_area = _get_windows_work_area()
+
+    if work_area is not None:
+        _, _, phys_w, phys_h = work_area
+        work_w = max(1, int(round(phys_w / dpi_scale)))
+        work_h = max(1, int(round(phys_h / dpi_scale)))
+    else:
+        screens = getattr(webview_module, "screens", None) or []
+        if screens:
+            primary = screens[0]
+            work_w = int(getattr(primary, "width", 1440))
+            work_h = int(getattr(primary, "height", 900))
+            reported_scale = float(getattr(primary, "scale", 1.0) or 1.0)
+            if reported_scale <= 1.01 and dpi_scale > 1.01:
+                work_w = max(1, int(round(work_w / dpi_scale)))
+                work_h = max(1, int(round(work_h / dpi_scale)))
+        else:
+            work_w, work_h = 1440, 900
+
+    min_w = min(860, work_w)
+    min_h = min(600, work_h)
+    default_w = max(min_w, min(1440, int(work_w * 0.85)))
+    default_h = max(min_h, min(920, int(work_h * 0.85)))
+
+    if saved_state:
+        width = max(min_w, min(work_w, int(saved_state["width"])))
+        height = max(min_h, min(work_h, int(saved_state["height"])))
+        maximized = bool(saved_state.get("maximized", False))
+    else:
+        width, height, maximized = default_w, default_h, False
+
     return {
         "width": width,
         "height": height,
-        "x": x,
-        "y": y,
-        "screen": primary,
-        "min_size": (min(860, width), min(600, height)),
+        "maximized": maximized,
+        "min_size": (min_w, min_h),
     }
 
 
@@ -206,7 +413,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         webview.settings["ALLOW_DOWNLOADS"] = True
-        geometry = _compute_window_geometry(webview)
+        saved_state = _load_window_state()
+        geometry = _compute_window_geometry(webview, saved_state=saved_state)
         window = webview.create_window(
             "Firewall Config Reader",
             url,
@@ -215,6 +423,11 @@ def main(argv: list[str] | None = None) -> int:
             **geometry,
         )
         events = getattr(window, "events", None)
+        if events is not None:
+            if hasattr(events, "before_show") and not geometry.get("maximized"):
+                events.before_show += lambda: (_center_native_window(window), None)[1]
+            if hasattr(events, "closing"):
+                events.closing += lambda: _capture_and_save_window_state(window)
         if events is not None and hasattr(events, "shown"):
             events.shown += _close_splash
             webview.start(private_mode=True)

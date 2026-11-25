@@ -1,228 +1,156 @@
 # Firewall Config Reader
 
-**Offline-first firewall configuration analyzer, policy simulator, Tech Support File (TSF) explorer, and AI config assistant for Palo Alto Networks (PAN-OS) and Fortinet FortiGate (FortiOS).**
+**Offline-first firewall configuration analyzer, traffic simulator, security auditor, Tech Support File (TSF) explorer, and AI config assistant for Palo Alto Networks (PAN-OS) and Fortinet FortiGate (FortiOS).**
 
-Built with **FastAPI**, **Jinja2**, and **Vanilla JS/CSS** — with instant browser access, one-click local startup, and standalone Windows desktop packaging via **PyInstaller + pywebview + Inno Setup**.
+Designed for network and security engineers to audit, troubleshoot, compare, and document firewall configs quickly — without needing console access to the live appliance.
 
-🌐 **Live Web App:** **[Firewall Config Reader](https://firewall-config-reader-e7hs.onrender.com/)**  
+🌐 **Live Web App:** **[Open Firewall Config Reader](https://firewall-config-reader-e7hs.onrender.com/)**  
 💻 **Windows Desktop App:** **[Download Latest Installer (`.exe`) & Portable ZIP](https://github.com/chaziyu/firewall-config-reader/releases/latest)**
 
 ---
 
-## Key Features
+## Supported Files
 
-### 1. Palo Alto Networks (PAN-OS `.xml`)
-* **Dashboard**: Appliance identity, management IPv4/IPv6 settings, software version, High Availability (Active-Passive / Active-Active) cluster overview, **Internet Connectivity & Local Disk** indicators, **Certificate Expiry Alerts**, **Public Management Exposure** (Critical vs. Warning severity grading + local-only live TCP/TLS/SSH-banner reachability probe), interactive **Global IP / Object "Where-Used" Search**, **End-to-End Packet Flow Simulator (Trace Packet)**, **Firewall-Aware Config Diff** (compare two snapshots), and **One-Click HTML / Print-to-PDF Audit Report**.
-* **Policies & Traffic Match Simulator**:
-  * Interactive **Policy Match Tester** supporting 5-tuple + Zone/Interface/User evaluation across **Security**, **NAT**, **PBF**, **Decryption**, **Authentication**, and **DoS** rulebases.
-  * **Cleanup & Hygiene Analyzer**: Identifies unused address/service objects & groups, disabled rules, overly broad `any → any` allow rules, and expired one-time schedules.
-  * Full inspection of Security, NAT, QoS, PBF, Decryption, Tunnel Inspection, App Override, Authentication, DoS Protection, and SD-WAN rulebases with color-coded indicators (`Enabled`, `Disabled`, `Panorama-pushed`).
-* **Objects**: Addresses, Address Groups, Application Groups, Services, Service Groups, Tags, Regions, Dynamic User Groups, Devices, GlobalProtect HIP Objects/Profiles, External Dynamic Lists (EDL), Custom Objects (Data Patterns, Spyware, Vulnerability, URL Categories), Security Profiles & Groups, Log Forwarding, Authentication, Decryption Profiles, SD-WAN Link Management, and Schedules.
-* **Network**: Ethernet / Aggregate / Sub-Interfaces, VLANs, Loopbacks, Tunnels, SD-WAN, Zones, Virtual Wires, Virtual Routers (Static Routes, Admin Distances, ECMP, BGP, and Longest-Prefix-Match Route Lookup), **IPSec Inspector** (all-in-one tunnel health check stitching IKE/crypto, tunnel interface/zone/VR, static routes, and security/NAT policies with misconfiguration flags), IPSec & GRE Tunnels, DHCP Servers/Relays, DNS Proxy, GlobalProtect Portals/Gateways/MDM/Clientless, QoS, and Network Profiles.
-* **Device**: General Setup, Management Interface & Services, Service Routes, Panorama, High Availability (Election, Link/Path Monitoring), Administrators, Admin Roles, Auth Profiles (RADIUS, LDAP, TACACS+, Kerberos, SAML, MFA), **Certificate Expiry Inspector** (X.509 PEM CN/SAN/Expiry parsing), Server Profiles, Log Settings, Session Timeouts, and User-ID.
-
-### 2. Fortinet FortiGate (FortiOS `.conf` / `.txt` / `.cfg`)
-* **Summary**: Hostname, Serial Number, Firmware Version, WAN IP/Netmask, Primary/Secondary DNS, HA cluster status, **Internet Connectivity & Local Hard Disk (SSD vs. Diskless)** indicators, **Certificate Expiry Alerts**, **Public Management, Public VIP & WAN-Behind-NAT Exposure** (Critical vs. Warning severity + local-only live TCP/TLS/SSH-banner reachability probe), interactive **Global IP / Object "Where-Used" Search**, **End-to-End Packet Flow Simulator (Trace Packet)**, **Firewall-Aware Config Diff** (compare two snapshots), and **One-Click HTML / Print-to-PDF Audit Report**.
-* **Interfaces**: Hierarchical interface tree with visual row indicators for **Zones (muted)**, **Hardware / Aggregate Switches (blue)**, **Sub-interfaces / VLANs (purple)**, and **Disabled interfaces (red)**.
-* **Network**: IPAM, FortiExtender, SD-WAN (Zones, Members, Rules, Performance SLA), Static Routes (with Longest-Prefix-Match Route Lookup), Policy Routes, RIP, OSPF, BGP, Routing Objects (Prefix Lists, Route Maps, AS Path Lists), and Multicast (PIM).
-* **Policy & Objects + Policy Lookup Simulator**:
-  * Interactive top-to-bottom **Policy Lookup Simulator** evaluating Source/Destination Interface, Source/Destination IP/CIDR/Object, and Protocol/Service with implicit deny detection.
-  * **Cleanup & Hygiene Analyzer**: Identifies unused custom address/service/VIP/IP Pool objects (with draft cleanup CLI), disabled policies, overly broad `all/ALL` rules, unlogged allow policies, and expired one-time schedules.
-  * Firewall Policies, Proxy Policies, Auth Rules, Addresses (Subnet, IP Range, FQDN, Interface Subnet, Address Groups, Host Regex), Services, Schedules, Virtual IPs (VIP/DNAT), IP Pools, Protocol Options, Traffic Shaping, Virtual Servers, and Health Checks.
-* **Security Profiles**: Antivirus, Web Filter, DNS Filter, Application Control, IPS, File Filter, Email Filter, VoIP, WAF, SSL Inspection, Web Rating Overrides, and Web Profile Overrides.
-* **VPN**:
-  * **Site-to-Site Inspector**: All-in-one health overview and per-tunnel trace stitching Phase 1/2, tunnel interface/zone, static routes, and firewall policies (flagging disabled tunnels, missing routes/policies, accidental NAT, IKEv1, and weak crypto/DH).
-  * **SSL-to-IPSec Migration Assistant**: Offline readiness audit from backup configs, certificate/SAML/Web-Mode checks, GUI/Wizard quick-reference parameters, copyable draft Dial-up IPSec IKEv2 CLI (Phase 1, Phase 2, and cloned `ssl.root` policies), and FortiClient/cutover checklist.
-  * IPSec Phase 1 & Phase 2 Selectors, IPSec Concentrators, SSL-VPN Portals, SSL-VPN Settings, and SSL-VPN Clients.
-* **User & Auth**: Local Users, User Groups, Guest Management, LDAP Servers, RADIUS Servers, FSSO, FortiTokens, and Auth Portal Settings.
-* **WiFi & Switch**: Managed FortiAPs, SSIDs, FortiAP Profiles, WIDS Profiles, Managed FortiSwitches, Port Policies, and NAC Policies.
-* **System & Logs**: Administrators (`super_admin` highlighting), Admin Profiles, System Settings, High Availability, SNMP, **Certificate Expiry Inspector** (X.509 PEM CN/SAN/Expiry parsing), Global/Local Log Settings, and Threat Weight scores.
-
-### 3. Tech Support File (TSF) Explorer (`.zip` / `.tgz` / `.tar.gz`)
-* **Hardened Archive Extraction**: Screens against path traversal (Zip Slip), symlink escapes, deep nesting (>20 levels), oversized files, password-protected archives, and executable binaries (`.exe`, `.dll`, `.elf`, shell/PHP scripts).
-* **Instant Filename & Full-Text Search**: Lazy directory tree browser, instant filename filter, background full-text content indexing with line-level jump-to-match preview, and raw file download.
-
-### 4. Floating AI Config Assistant (`gemini-flash-lite-latest`)
-* Context-aware firewall assistant grounded strictly on the active configuration summary (up to 250,000 characters / 500 rules per table).
-* Built-in **🔑 API Key Drawer** in the chat header: keys entered in the UI are stored **strictly in per-session RAM** (never written to disk or shared across sessions).
-* Supports Compact, Expanded, and centered Overlay modes with XSS-safe Markdown rendering.
+| Platform / Input | File Format | Max Size | What It Opens |
+| :--- | :--- | :--- | :--- |
+| **Palo Alto Networks (PAN-OS 10.x+)** | `.xml` | 50 MB | Full Config Workspace + Simulators & Audits |
+| **Fortinet FortiGate (FortiOS 6.x / 7.x)** | `.conf`, `.txt` | 50 MB | Full Config Workspace + Simulators & Audits |
+| **Palo Alto Tech Support File (TSF)** | `.zip` | 500 MB | Split-Pane TSF Tree & Full-Text Log Explorer |
 
 ---
 
-## Project Architecture
+## Core Capabilities
 
-```text
-firewall-config-reader/
-├── server.py                     # FastAPI application factory & Uvicorn entrypoint
-├── Start Local.bat               # One-click Windows local server + browser launcher
-├── Build Desktop App.bat         # PyInstaller + Inno Setup Windows desktop builder
-├── requirements.txt              # Runtime Python dependencies
-├── backend/
-│   ├── __init__.py
-│   ├── auth.py                   # Optional password authentication (FW_PASSWORD)
-│   ├── cert_inspector_service.py # X.509 PEM certificate expiry & SAN/CN inspector
-│   ├── chat_service.py           # Gemini AI config summary builder & prompt engine
-│   ├── config_diff_service.py    # Firewall-aware structural config snapshot diff
-│   ├── exposure_check.py         # Public mgmt/VIP/WAN-NAT exposure + local TCP/TLS/SSH probe
-│   ├── hygiene_service.py        # Unused objects & rule/schedule hygiene analyzer
-│   ├── lifecycle_service.py      # FortiGate & PAN-OS hardware/firmware lifecycle evaluator
-│   ├── packet_trace_service.py   # End-to-end packet flow simulator (RPF, DNAT, LPM, Policy, SNAT)
-│   ├── policy_lookup_service.py  # FortiGate top-down 5-tuple policy match engine
-│   ├── posture_service.py        # Internet connectivity & local hard disk posture checks
-│   ├── report_export_service.py  # Standalone HTML / Print-to-PDF security audit report generator
-│   ├── route_lookup_service.py   # Longest-prefix-match route lookup (FG & PA)
-│   ├── session_store.py          # In-memory LRU session store & SHA-256 parser cache
-│   ├── ssl_to_ipsec_service.py   # FortiGate SSL-VPN -> Dial-up IPSec migration assistant
-│   ├── upload_service.py         # Upload filename, size, XXE, and magic-byte validation
-│   ├── vpn_inspector_service.py  # End-to-end Site-to-Site IPSec VPN inspector & checks
-│   ├── where_used_service.py     # Global IP / CIDR / object reference search engine
-│   ├── routes/
-│   │   ├── chat_api.py           # GET/POST/DELETE /api/chat & POST /api/chat/key
-│   │   ├── config_api.py         # Section APIs, lookups, where-used, diff, exposure probe
-│   │   ├── pages.py              # HTML routes: /, /login, /workspace, /tsf, /health
-│   │   ├── tsf_api.py            # TSF tree, search, file preview, and download APIs
-│   │   └── upload.py             # POST /api/upload, TSF progress polling, session reset
-│   └── view_models/
-│       ├── fortigate.py          # Declarative UI block builders for 10 FortiGate sections
-│       └── paloalto.py           # Declarative UI block builders for 5 Palo Alto sections
-├── parsers/
-│   ├── __init__.py               # Top-level parser exports
-│   ├── base.py                   # Abstract BaseFirewallParser
-│   ├── fortigate/                # FortiGate (FortiOS) CLI parser subpackage
-│   │   ├── __init__.py
-│   │   ├── core.py               # FortiGateParser main class
-│   │   ├── bgp.py
-│   │   ├── logs.py
-│   │   ├── security.py
-│   │   ├── system.py
-│   │   ├── user.py
-│   │   ├── vpn.py
-│   │   └── wifi.py
-│   └── paloalto/                 # Palo Alto (PAN-OS) XML parser subpackage
-│       ├── __init__.py
-│       ├── base.py               # PaloAltoParser base class & XML helpers
-│       ├── dashboard.py
-│       ├── device.py
-│       ├── network.py
-│       ├── objects.py
-│       └── policies.py
-├── tsf/
-│   ├── extractor.py              # Hardened TSF ZIP/TGZ validator & extractor
-│   ├── file_preview.py           # Paginated text preview & binary detection
-│   ├── indexer.py                # Directory tree & background full-text search indexer
-│   └── search.py                 # Search helpers
-├── templates/
-│   ├── base.html                 # Shared shell, theme script, and CSS imports
-│   ├── landing.html              # Upload dropzone & vendor cards
-│   ├── login.html                # Password authentication gate
-│   ├── tsf.html                  # TSF split-pane explorer
-│   └── workspace.html            # Main firewall config workspace & floating AI chatbox
-├── static/
-│   ├── css/
-│   │   ├── theme.css             # Dark & Light mode color tokens and row highlight palette
-│   │   ├── app.css               # Layout, cards, tabs, tables, legend pills, badges
-│   │   ├── chat.css              # Floating AI chatbox & API key drawer styles
-│   │   └── tsf.css               # TSF split-pane tree and code viewer styles
-│   └── js/
-│       ├── theme.js              # Dark/Light theme toggle & sidebar collapse
-│       ├── upload.js             # Drag-and-drop upload & TSF extraction progress bar
-│       ├── workspace.js          # Declarative JSON block renderer & policy simulators
-│       ├── table.js              # Searchable, sortable, filterable table + CSV exporter
-│       ├── chat.js               # Floating AI assistant + XSS-safe Markdown renderer
-│       └── tsf.js                # TSF tree browser, search, and line-jump viewer
-├── scripts/
-│   ├── desktop_launcher.py       # Native desktop window launcher (pywebview + Uvicorn)
-│   ├── assets/                   # Application icon (app.ico) and splash screen
-│   └── installer/
-│       └── FirewallConfigReader.iss  # Inno Setup 6 Windows installer script
-└── tests/
-    └── test_app.py               # End-to-end FastAPI test suite
-```
+### 🔍 Troubleshoot & Simulate Traffic
+* **End-to-End Packet Flow Simulator (`Trace Packet`)**: Trace a packet step-by-step through RPF, DNAT/VIP, Longest-Prefix-Match routing, Security Policy evaluation, and SNAT/IP Pool translation.
+* **Policy Match / Policy Lookup Simulator**: Test 5-tuple traffic (zones/interfaces, source/destination IP or object, port/protocol, user) with top-down first-match evaluation, shadowed-rule awareness, and implicit deny detection.
+* **Longest-Prefix-Match (LPM) Route Lookup**: Quickly verify which static route or Virtual Router entry wins for any destination IP.
+* **Global Quick Search (`Ctrl+K`) & "Where-Used" Lookup**: Search any IP, CIDR subnet, address object, VIP, or interface from anywhere in the workspace to see every policy, NAT rule, route, VPN, and interface referencing it.
+
+### 🩺 Audit Security, Health & Lifecycle
+* **Preventive Maintenance (PM) Lookup**: Automatically evaluates backup-config verifiable PM checks for FortiGate and Palo Alto — firmware/EoS/FFR, timezone (GMT+8) & NTP, log managers (FortiAnalyzer/FortiCloud/Syslog), interfaces, routing, VPN, HA, management access, and dynamic 90-day PAN-OS log filter — in a color-coded, filterable table exportable to CSV and Excel.
+* **Hardware & Firmware Lifecycle Checker**: Automatically checks FortiGate hardware EoS, last supported firmware, and FortiOS / PAN-OS branch EoL/EoS dates and latest available patches (works online with a bundled offline fallback for air-gapped environments).
+* **Public Management & VIP Exposure Check**: Flags publicly exposed management interfaces, VIPs, and WAN-behind-NAT risks with severity grading. When running locally, includes an optional **live TCP/TLS/SSH reachability probe**.
+* **Quick Security Audit**: Automatically flags overly broad `any → any` / `all → ALL` allow rules, rules missing security profiles or logging, weak VPN crypto/DH groups, unused addresses, and disabled rules.
+* **Certificate Expiry Inspector**: Parses embedded X.509 PEM certificates (CN, SAN, issuer, validity dates) and highlights expired or expiring-soon certificates.
+* **Cleanup & Hygiene Analyzer**: Finds unused address/service/VIP/IP Pool objects (with draft cleanup CLI for FortiGate), disabled policies, overly broad rules, and expired one-time schedules.
+* **Appliance Posture Indicators**: Displays Internet connectivity posture and local hard disk status (e.g., SSD vs. diskless FortiGate) right on the Overview.
+
+### 🔄 Compare, Migrate & Export
+* **Firewall-Aware Config Diff**: Upload a second snapshot to compare structural changes across policies, NAT, objects, routes, interfaces, and VPNs — not just raw line diffs.
+* **Site-to-Site IPSec VPN Inspector**: Stitches together Phase 1/IKE, Phase 2/IPSec, tunnel interfaces, zones, static routes, and firewall policies into one health view — flagging missing routes/policies, accidental NAT, IKEv1, and weak crypto.
+* **FortiGate SSL-VPN → Dial-up IPSec Migration Assistant**: Offline readiness audit (certificates, SAML, Web Mode), GUI/Wizard quick-reference parameters, copyable draft IKEv2 CLI (Phase 1, Phase 2, and cloned `ssl.root` policies), and a FortiClient cutover checklist.
+* **One-Click Full Config Excel Export (`.xlsx`)**: Export every parsed section into a clean, multi-sheet Excel workbook (`⬇ Export to Excel` in the top bar). Individual tables also support live search, sorting, column filtering, and **CSV export**.
+* **Standalone Audit Report (HTML / Print-to-PDF)**: Generate a shareable security and health summary report in one click (`📄 Audit Report`).
+
+### 📦 Tech Support File (TSF) Explorer
+* **Safe, Fast Archive Inspection**: Extracts `.zip` TSF bundles (up to 500 MB) into a split-pane directory tree with built-in security screening against path traversal, symlink escapes, and executable binaries.
+* **Filename & Full-Text Search**: Filter files instantly by name (e.g. `mp-log`, `running-config`, `dp-monitor`) or search file contents across the entire archive with line-level jump-to-match preview and raw file download.
+
+### ✨ Floating AI Config Assistant
+* Ask natural-language questions about policies, NAT, routing, VPNs, or hardening — grounded strictly on your loaded config (read-only, defensive-only, and prompt-injection hardened).
+* Click the **🔑 key icon** in the chat header to paste your own Gemini API key (stored in your session's RAM only).
+* Supports Compact, Expanded, and Overlay window sizes, plus Dark and Light themes across the entire app.
 
 ---
 
 ## Quick Start
 
-### Option 1: Instant Online Web App (No Installation Required)
-Open **[Firewall Config Reader](https://firewall-config-reader-e7hs.onrender.com/)** directly in your browser.
-* Uploaded `.xml` and `.conf` files are sanitized (`[REDACTED]` credentials) and held strictly in ephemeral compressed RAM for your session only.
-* To use the AI Config Assistant online, click the **🔑 key icon** in the chatbox to enter your own Gemini API key for your session.
-* *(Tip: For large 100–500 MB TSF `.zip` archives or 100% air-gapped offline auditing, use the Windows Desktop App or Local Run below).*
+### Option 1: Instant Web App (No Installation)
+1. Open **[Firewall Config Reader](https://firewall-config-reader-e7hs.onrender.com/)** in your browser.
+2. Drag and drop your `.xml`, `.conf`, `.txt`, or `.zip` file.
+3. *(Optional)* To use the AI Config Assistant online, click the **✨** button → **🔑** icon and paste your Gemini API key for the current session.
 
-### Option 2: Windows Desktop Installer (`.exe`)
-Download and run **`FirewallConfigReader-Setup-<version>.exe`** from **[GitHub Releases](https://github.com/chaziyu/firewall-config-reader/releases/latest)**.
-* Runs 100% locally in a native desktop window with zero Python setup required.
-* Includes a built-in **Auto-Update Checker** in the sidebar footer to download, verify (SHA-256), and install new releases in one click.
+> **Tip:** For large 100–500 MB TSF archives, local live reachability probes, or 100% air-gapped offline audits, use the Windows Desktop App or Local Run below.
 
-### Option 3: One-Click Local Run from Source (Windows)
-Double-click **`Start Local.bat`** (or run it from a terminal):
-```bat
-"Start Local.bat"
-```
-This script automatically creates `.venv` (if missing), installs `requirements.txt`, starts Uvicorn on `http://127.0.0.1:8501/`, and opens your default browser once `/health` reports ready.
+### Option 2: Windows Desktop App (Recommended for Daily Use)
+1. Download **`FirewallConfigReader-Setup-<version>.exe`** (or the Portable ZIP) from **[GitHub Releases](https://github.com/chaziyu/firewall-config-reader/releases/latest)**.
+2. Run the installer and launch **Firewall Config Reader** — runs 100% locally in a native window with zero Python setup.
+3. Includes a built-in **Auto-Update Checker** in the sidebar footer to download, SHA-256 verify, and install new releases in one click.
 
-### Option 4: Manual Python / Cross-Platform Run
-Requires **Python 3.11+**:
+### Option 3: Run Locally from Source
+**Windows (One-Click):**
+Double-click **`Start Local.bat`** — it automatically creates `.venv`, installs dependencies, starts the local server on `http://127.0.0.1:8501/`, and opens your browser.
+
+**macOS / Linux / Manual Python (Requires Python 3.11+):**
 ```bash
 python -m venv .venv
-# Windows
-.venv\Scripts\activate
-# macOS / Linux
-source .venv/bin/activate
-
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 python server.py
 ```
-Open **`http://127.0.0.1:8501/`** in your browser.
-
-### Option 5: Build Standalone Windows Desktop App & Installer Locally
-Double-click **`Build Desktop App.bat`**:
-* Produces a standalone `--onedir` desktop bundle at `dist\FirewallConfigReader\FirewallConfigReader.exe`.
-* If **Inno Setup 6** (`ISCC.exe`) is installed (`winget install JRSoftware.InnoSetup`), it also compiles a redistributable Windows installer at `dist\FirewallConfigReader-Setup-<version>.exe`.
+Then open **`http://127.0.0.1:8501/`** in your browser.
 
 ---
 
-## Configuration & Environment Variables
+## How to Use It (Engineer Workflow)
 
-All environment variables are optional:
+### 1. Load a Config
+Drag and drop a backup file onto the landing page (or click **Browse files**). The vendor is detected automatically, credentials are redacted on upload, and you are taken straight into the workspace. Click **`↑ Load new config`** in the sidebar footer at any time to wipe the current session and load another file.
+
+### 2. Navigate the Workspace
+Both Palo Alto and FortiGate share a unified sidebar layout so you don't have to re-learn the UI between vendors:
+
+| Sidebar Tab | What You'll Find Here |
+| :--- | :--- |
+| **📊 Overview** | Hostname, model/version, management & WAN IPs, HA cluster status, Internet/Disk posture, plus **Where-Used Search**, **Trace Packet**, and **Config Diff**. |
+| **🩺 Security & Health** | **Hardware/Firmware Lifecycle (EoL/EoS)**, **Public Management & VIP Exposure** (with local reachability probe), **Certificate Expiry Alerts**, and **Quick Security Audit** findings. |
+| **📋 PM Lookup** | Automated backup-config Preventive Maintenance checks (firmware/EoS/FFR, GMT+8 & NTP, log managers, interfaces, routing, VPN, HA, GUI/SSH access, and 90-day PAN-OS log filter) with status filtering and CSV/Excel export. |
+| **🛡 Policies & NAT** | **Policy Match / Lookup Simulator**, **Cleanup & Hygiene Analyzer**, and all rulebases (Security, NAT, Proxy, PBF, Decryption, QoS, DoS, Auth, SD-WAN) with color-coded status legends. |
+| **📦 Objects** | Addresses, address groups, services, service groups, VIPs/IP Pools, schedules, EDLs, tags, regions, and custom objects. |
+| **🌐 Interfaces & Network** | Hierarchical interface tables (zones, switches, VLANs, sub-interfaces, disabled highlights), SD-WAN, Virtual Routers, Static/Policy/BGP/OSPF/RIP routes, and **LPM Route Lookup**. |
+| **🔒 Security Profiles** | Antivirus, Web/URL Filter, DNS Filter, IPS/Vulnerability, App Control, File/Data Filtering, SSL Inspection / Decryption profiles, and Profile Groups. |
+| **🔑 VPN** | **Site-to-Site IPSec Inspector**, **SSL-to-IPSec Migration Assistant** *(FortiGate)*, IKE/Phase 1 & Phase 2 tunnels, SSL-VPN portals/settings, and GlobalProtect *(Palo Alto)*. |
+| **👥 Users & Auth** | Local users & groups, LDAP/RADIUS/SAML/TACACS+/Kerberos/MFA profiles, FSSO, FortiTokens, and User-ID. |
+| **📶 WiFi & Switch** *(FortiGate)* | Managed FortiAPs, SSIDs, FortiAP & WIDS profiles, managed FortiSwitches, port policies, and NAC policies. |
+| **⚙ System & Logs** | Administrators, admin roles/profiles, HA details, Panorama/SNMP, **Certificate Expiry Inspector**, session timeouts, and log forwarding/settings. |
+
+### 3. Top-Bar Shortcuts
+* **`🔎 Search (Ctrl+K)`**: Open Global Quick Search from any tab to find where an IP, subnet, object, VIP, or interface is used.
+* **`📄 Audit Report`**: Download/open a printable HTML security & health audit report (use your browser's Print → Save as PDF).
+* **`⬇ Export to Excel`**: Export the entire parsed configuration into a single `.xlsx` workbook (saves directly to your `Downloads` folder in the Desktop App).
+* **`☀ Light / 🌙 Dark`**: Switch themes anytime.
+* **`✨` (bottom-right)**: Open the AI Config Assistant to ask questions about the loaded config.
+
+### 4. Inspecting a TSF Archive (`.zip`)
+1. Drop a Palo Alto TSF `.zip` archive onto the landing page and wait for extraction/indexing to finish.
+2. Browse the directory tree on the left, or switch between **Filename** and **Content** search modes in the top bar.
+3. Click any search match to jump straight to that line in the file viewer, or download the raw file.
+
+---
+
+## Security & Privacy
+
+Built to handle sensitive customer and production firewall backups safely:
+
+* **Automatic Secret Redaction on Upload**: Passwords, password hashes, VPN pre-shared keys (PSKs), private keys, and shared secrets are scrubbed to `[REDACTED]` immediately upon upload — before parsing, caching, or AI summarization.
+* **Zero Disk Persistence for Configs**: Uploaded `.xml` and `.conf` files are never written to disk. They are compressed and sealed in ephemeral per-session RAM, and immediately wiped when you click **`↑ Load new config`** or when your session expires (30-minute idle timeout by default).
+* **Session-Only AI Keys**: Gemini API keys entered in the chatbox are kept strictly in your session's RAM, never saved to disk, never returned in plaintext, and never shared with other users.
+* **Safe for Shared / Cloud Hosting**: Server-side `GEMINI_API_KEY` fallback only works for direct local (`localhost`) sessions — remote visitors always supply their own session key. Optional `FW_PASSWORD` enables a login gate.
+* **Hardened Uploads & Air-Gapped Mode**: Rejects executables, scripts, XXE XML declarations, and Zip Slip / symlink-escape archives. Set `DISABLE_ONLINE_CHECKS=1` to disable external lifecycle lookups in strictly offline environments.
+
+---
+
+## Self-Hosting, Settings & Building from Source
+
+### Optional Environment Variables
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| `FW_PORT` | `8501` | Local TCP port for Uvicorn (`server.py` / `Start Local.bat`). |
-| `FW_PASSWORD` | *(unset)* | When set, enables the `/login` password gate across all pages and APIs (recommended for shared or cloud deployments). |
-| `GEMINI_API_KEY` | *(unset)* | Default Gemini API key for **direct local loopback (`127.0.0.1`) sessions only**. Remote/proxied visitors must enter their own session key in the chatbox UI. |
+| `FW_PORT` | `8501` | Local TCP port for the web server. |
+| `FW_PASSWORD` | *(unset)* | Enables a `/login` password gate across all pages and APIs (recommended for shared deployments). |
+| `GEMINI_API_KEY` | *(unset)* | Default Gemini API key for direct local (`127.0.0.1`) sessions only. Remote visitors must enter their own key in the UI. |
 | `GEMINI_MODEL` | `gemini-flash-lite-latest` | Gemini model ID used by the AI Config Assistant. |
+| `GEMINI_TIMEOUT_MS` | `60000` | Request timeout (in milliseconds) for Gemini API calls. |
+| `DISABLE_ONLINE_CHECKS` | `0` | Set to `1` / `true` to disable online EoL/EoS & firmware RSS lookups (uses bundled offline catalog only). |
 | `TSF_SESSIONS_DIR` | `%TEMP%/tsf_sessions` | Temporary directory used for extracted TSF archives. |
 
----
+### Build the Windows Desktop App Locally
+Double-click **`Build Desktop App.bat`**:
+* Builds a standalone desktop bundle at `dist\FirewallConfigReader\FirewallConfigReader.exe`.
+* If **Inno Setup 6** (`ISCC.exe`) is installed (`winget install JRSoftware.InnoSetup`), it also builds the Windows installer at `dist\FirewallConfigReader-Setup-<version>.exe`.
 
-## Security & Data Privacy Design
-
-1. **Three-Layer In-Memory Config Protection (Zero Disk Persistence)**:
-   * **Layer 1 — Immediate Secret Redaction on Upload**: Before uploaded config bytes are hashed, parsed, or stored in RAM, `sanitize_config_bytes()` (`backend/upload_service.py`) automatically scrubs sensitive cryptographic fields to `[REDACTED]`:
-     * **FortiGate**: `set password`, `set passwd`, `set psksecret`, `set secret`, `set key`, `set auth-password-l1/l2`, and `set private-key`.
-     * **Palo Alto**: `<phash>`, `<private-key>`, `<psk>`, `<secret>`, `<bind-password>`, `<key>`, `<password>`, `<auth-password>`, and `<priv-password>`.
-     * This ensures password hashes, VPN pre-shared keys, and private keys never sit in memory and can never be leaked to the Gemini AI assistant.
-   * **Layer 2 — Compressed & Ephemeral Key-Sealed RAM Storage**:
-     * Uploaded configs are **never written to disk** and are **never kept as raw plain-text bytes** in `SessionData`.
-     * `sess.raw_content` (`backend/session_store.py`) transparently compresses the sanitized config with `zlib` (~90% smaller memory footprint) and XOR-seals the compressed payload using an ephemeral per-session 256-bit random key (`sess._mem_key = secrets.token_bytes(32)`), unsealing only on demand.
-     * Clicking **`↑ Load new config`** (or session expiration) immediately wipes `_sealed_content`, rotates `_mem_key` to a new random key, clears chat history, and evicts unreferenced parser cache entries (`evict_parser_cache_if_unreferenced`).
-   * **Layer 3 — Deduplicated XML Element Trees**:
-     * `PaloAltoParser` (`parsers/paloalto/base.py`) operates directly on the shared `ElementTree` root without serializing duplicate plain-text XML strings across section parsers.
-2. **Per-Session RAM-Only API Keys**:
-   * Gemini API keys entered via the chatbox 🔑 button are stored only in `sess.gemini_api_key` in RAM for that session ID. They are never saved to disk, never returned in plaintext to the browser (only masked as `AIza...xxxx`), and never shared across sessions.
-   * When deployed behind a reverse proxy (e.g., Render, Cloudflare, Nginx where `X-Forwarded-For` is present), server-wide `.env` / `GEMINI_API_KEY` fallback is automatically disabled so every visitor must supply their own session key.
-3. **Bounded Memory & Session Eviction**:
-   * Active sessions are capped at `MAX_SESSIONS = 24` with a 2-hour idle TTL (`SESSION_TTL_SECONDS`) and automatic LRU eviction to prevent memory exhaustion (OOM) on cloud containers.
-4. **Upload & Archive Hardening**:
-   * Blocks script payloads, executable binaries, and path-traversal ZIP entries before parsing or extraction.
-5. **Cryptographic Session Cookies**:
-   * Sessions use 192-bit `secrets.token_urlsafe(24)` tokens stored in `HttpOnly`, `SameSite=Lax` cookies (with `Secure` auto-enabled over HTTPS).
-
----
-
-## Running Tests
-
-```bash
+### Run the Test Suite
+```powershell
 .venv\Scripts\python.exe -m pytest -v
 ```

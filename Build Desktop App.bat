@@ -3,7 +3,7 @@ setlocal EnableExtensions
 cd /d "%~dp0"
 
 set "PYTHON=%~dp0.venv\Scripts\python.exe"
-if "%APP_VERSION%"=="" set "APP_VERSION=2.4.4"
+if "%APP_VERSION%"=="" set "APP_VERSION=2.4.5"
 
 if not exist "%PYTHON%" (
     echo Creating the Python environment...
@@ -18,7 +18,7 @@ echo Installing/updating application and desktop packaging dependencies...
 "%PYTHON%" -m pip install -r requirements.txt pyinstaller pywebview
 if errorlevel 1 goto :failed
 
-set "PYINSTALLER_ARGS=--noconfirm --clean --onedir --windowed --noupx --name FirewallConfigReader --icon "%~dp0scripts\assets\app.ico" --splash "%~dp0scripts\assets\splash.png" --specpath build --add-data "%~dp0assets;assets" --add-data "%~dp0data;data" --add-data "%~dp0templates;templates" --add-data "%~dp0static;static" --collect-submodules backend --collect-submodules parsers --collect-submodules tsf --collect-submodules uvicorn --hidden-import server --collect-all webview --exclude-module streamlit --exclude-module pandas --exclude-module pydeck --exclude-module altair --exclude-module pytest --exclude-module _pytest --exclude-module pip --exclude-module setuptools --exclude-module wheel --exclude-module webview.platforms.cocoa --exclude-module webview.platforms.gtk --exclude-module webview.platforms.qt --exclude-module webview.platforms.android --exclude-module webview.platforms.cef"
+set "PYINSTALLER_ARGS=--noconfirm --clean --onedir --windowed --noupx --name FirewallConfigReader --icon "%~dp0scripts\assets\app.ico" --splash "%~dp0scripts\assets\splash.png" --manifest "%~dp0scripts\assets\app.manifest" --specpath build --add-data "%~dp0assets;assets" --add-data "%~dp0data;data" --add-data "%~dp0templates;templates" --add-data "%~dp0static;static" --collect-submodules backend --collect-submodules parsers --collect-submodules tsf --collect-submodules uvicorn --hidden-import server --collect-all webview --exclude-module streamlit --exclude-module pandas --exclude-module pydeck --exclude-module altair --exclude-module pytest --exclude-module _pytest --exclude-module pip --exclude-module setuptools --exclude-module wheel --exclude-module webview.platforms.cocoa --exclude-module webview.platforms.gtk --exclude-module webview.platforms.qt --exclude-module webview.platforms.android --exclude-module webview.platforms.cef"
 
 set "PY_BASE_PREFIX="
 for /f "delims=" %%P in ('%PYTHON% -c "import sys; print(sys.base_prefix)"') do set "PY_BASE_PREFIX=%%P"
@@ -26,6 +26,11 @@ if exist "%PY_BASE_PREFIX%\abi3t-compat\python3t.dll" (
     echo Bundling Python abi3t compatibility DLL: "%PY_BASE_PREFIX%\abi3t-compat\python3t.dll"
     set "PYINSTALLER_ARGS=%PYINSTALLER_ARGS% --add-binary "%PY_BASE_PREFIX%\abi3t-compat\python3t.dll;.""
 )
+
+echo.
+echo Generating splash screen ^(version %APP_VERSION%^)...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\generate_splash.ps1" -Version "%APP_VERSION%" -OutputPath "%~dp0scripts\assets\splash.png"
+if errorlevel 1 goto :failed
 
 echo.
 echo Packaging --onedir desktop bundle ^(version %APP_VERSION%^)...

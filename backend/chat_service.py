@@ -307,13 +307,13 @@ def build_system_prompt(
     if vendor == "Palo Alto":
         syntax_desc = 'Palo Alto PAN-OS configs are XML-based (nested <entry name="..."> elements).'
         ui_tabs = (
-            "Overview, Security & Health, Policies & NAT (includes Policy Match Simulator), "
+            "Overview, Security & Health, PM Lookup, Policies & NAT (includes Policy Match Simulator), "
             "Objects, Interfaces & Network, Security Profiles, VPN, Users & Auth, System & Logs"
         )
     else:
         syntax_desc = "FortiGate FortiOS configs use line-based CLI syntax (config/edit/set/next/end blocks)."
         ui_tabs = (
-            "Overview, Security & Health, Policies & NAT (includes Policy Lookup Simulator), "
+            "Overview, Security & Health, PM Lookup, Policies & NAT (includes Policy Lookup Simulator), "
             "Objects, Interfaces & Network, Security Profiles, VPN, Users & Auth, WiFi & Switch, System & Logs"
         )
 

@@ -32,6 +32,10 @@ from backend.lifecycle_service import (
     build_fortigate_lifecycle_blocks,
     evaluate_fortigate_lifecycle,
 )
+from backend.pm_checklist_service import (
+    build_pm_lookup_blocks,
+    evaluate_fortigate_pm_checklist,
+)
 from backend.posture_service import evaluate_fortigate_posture
 from backend.ssl_to_ipsec_service import (
     analyze_fortigate_ssl_to_ipsec,
@@ -249,6 +253,14 @@ def build_security_health(parser: Any, *, allow_probe: bool = False) -> dict[str
         blocks.append(health["cert_card"])
     blocks.append(health["audit_expander"])
     return {"section": "Security & Health", "blocks": blocks}
+
+
+def build_pm_lookup(parser: Any) -> dict[str, Any]:
+    """Build the backup-config Preventive Maintenance (PM) Lookup page for FortiGate."""
+    return {
+        "section": "PM Lookup",
+        "blocks": build_pm_lookup_blocks(evaluate_fortigate_pm_checklist(parser)),
+    }
 
 
 # ── 2. Interfaces ────────────────────────────────────────────────────────────
@@ -1742,6 +1754,7 @@ def build_fortigate_section(section: str, parser: Any, *, allow_probe: bool = Fa
     builders = {
         "Overview": lambda: build_overview(parser, allow_probe=allow_probe),
         "Security & Health": lambda: build_security_health(parser, allow_probe=allow_probe),
+        "PM Lookup": lambda: build_pm_lookup(parser),
         "Policies & NAT": lambda: build_policies_nat(parser),
         "Objects": lambda: build_objects(parser),
         "Interfaces & Network": lambda: build_interfaces_network(parser),

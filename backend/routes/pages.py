@@ -20,6 +20,7 @@ templates = Jinja2Templates(directory=str(ROOT_DIR / "templates"))
 PA_PAGES = [
     ("Overview", "📊"),
     ("Security & Health", "🩺"),
+    ("PM Lookup", "📋"),
     ("Policies & NAT", "🛡"),
     ("Objects", "📦"),
     ("Interfaces & Network", "🌐"),
@@ -32,6 +33,7 @@ PA_PAGES = [
 FG_PAGES = [
     ("Overview", "📊"),
     ("Security & Health", "🩺"),
+    ("PM Lookup", "📋"),
     ("Policies & NAT", "🛡"),
     ("Objects", "📦"),
     ("Interfaces & Network", "🌐"),

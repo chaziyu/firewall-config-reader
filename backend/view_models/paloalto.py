@@ -27,6 +27,10 @@ from backend.lifecycle_service import (
     build_paloalto_lifecycle_blocks,
     evaluate_paloalto_lifecycle,
 )
+from backend.pm_checklist_service import (
+    build_pm_lookup_blocks,
+    evaluate_paloalto_pm_checklist,
+)
 from backend.posture_service import evaluate_paloalto_posture
 from backend.view_models.common import (
     ADMIN_LEGEND,
@@ -307,6 +311,14 @@ def build_security_health(
     blocks.append(health["audit_expander"])
 
     return {"section": "Security & Health", "blocks": blocks}
+
+
+def build_pm_lookup(parsers: dict[str, Any]) -> dict[str, Any]:
+    """Build the backup-config Preventive Maintenance (PM) Lookup page for Palo Alto."""
+    return {
+        "section": "PM Lookup",
+        "blocks": build_pm_lookup_blocks(evaluate_paloalto_pm_checklist(parsers)),
+    }
 
 
 # ── 2. Policies ──────────────────────────────────────────────────────────────
@@ -1412,6 +1424,7 @@ def build_paloalto_section(section: str, parsers: dict[str, Any], *, allow_probe
             objects_parser=parsers.get("Objects"),
             allow_probe=allow_probe,
         ),
+        "PM Lookup": lambda: build_pm_lookup(parsers),
         "Policies & NAT": lambda: build_policies(parsers["Policies"], objects_parser=parsers.get("Objects")),
         "Objects": lambda: build_objects(parsers["Objects"]),
         "Interfaces & Network": lambda: build_network(parsers["Network"], policies_parser=parsers.get("Policies")),

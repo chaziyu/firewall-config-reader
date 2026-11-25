@@ -21,6 +21,7 @@ from backend.view_models.paloalto import build_paloalto_section
 
 PALO_ALTO_SECTIONS = (
     "Overview",
+    "PM Lookup",
     "Policies & NAT",
     "Objects",
     "Interfaces & Network",
@@ -31,6 +32,7 @@ PALO_ALTO_SECTIONS = (
 )
 FORTIGATE_SECTIONS = (
     "Overview",
+    "PM Lookup",
     "Policies & NAT",
     "Objects",
     "Interfaces & Network",
