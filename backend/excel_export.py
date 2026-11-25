@@ -19,18 +19,26 @@ from openpyxl.utils import get_column_letter
 from backend.view_models.fortigate import build_fortigate_section
 from backend.view_models.paloalto import build_paloalto_section
 
-PALO_ALTO_SECTIONS = ("Dashboard", "Policies", "Objects", "Network", "Device")
-FORTIGATE_SECTIONS = (
-    "Summary",
-    "Interfaces",
-    "Network",
-    "Policy & Objects",
-    "Security",
+PALO_ALTO_SECTIONS = (
+    "Overview",
+    "Policies & NAT",
+    "Objects",
+    "Interfaces & Network",
+    "Security Profiles",
     "VPN",
-    "User & Auth",
+    "Users & Auth",
+    "System & Logs",
+)
+FORTIGATE_SECTIONS = (
+    "Overview",
+    "Policies & NAT",
+    "Objects",
+    "Interfaces & Network",
+    "Security Profiles",
+    "VPN",
+    "Users & Auth",
     "WiFi & Switch",
-    "System",
-    "Log & Report",
+    "System & Logs",
 )
 
 _HEADER_FILL = PatternFill(start_color="DCE6F1", end_color="DCE6F1", fill_type="solid")
@@ -106,8 +114,8 @@ def _collect_datasets(
             datasets.extend(_collect_datasets(block.get("blocks") or [], next_prefix))
 
         elif btype == "profile_selector":
-            for prof in block.get("profiles") or []:
-                prof_label = str(prof.get("label") or "").strip()
+            for prof in block.get("options") or block.get("profiles") or []:
+                prof_label = str(prof.get("name") or prof.get("label") or "").strip()
                 next_prefix = f"{prefix} - {prof_label}" if (prefix and prof_label) else (prof_label or prefix)
                 datasets.extend(_collect_datasets(prof.get("blocks") or [], next_prefix))
 

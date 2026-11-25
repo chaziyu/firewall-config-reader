@@ -167,13 +167,58 @@ window.FWTable = (function () {
     tableWrap.appendChild(table);
     wrapper.appendChild(tableWrap);
 
+    const footer = document.createElement("div");
+    footer.className = "fw-table-footer";
+
     const countEl = document.createElement("div");
     countEl.className = "fw-table-count";
-    wrapper.appendChild(countEl);
+    footer.appendChild(countEl);
+
+    const pager = document.createElement("div");
+    pager.className = "fw-table-pager";
+    pager.style.display = "none";
+
+    const pageSizeSelect = document.createElement("select");
+    pageSizeSelect.className = "fw-select fw-table-pagesize";
+    for (const [val, label] of [
+      ["50", "50 / page"],
+      ["100", "100 / page"],
+      ["250", "250 / page"],
+      ["0", "All rows"],
+    ]) {
+      const opt = document.createElement("option");
+      opt.value = val;
+      opt.textContent = label;
+      if (val === "100") opt.selected = true;
+      pageSizeSelect.appendChild(opt);
+    }
+
+    const prevBtn = document.createElement("button");
+    prevBtn.type = "button";
+    prevBtn.className = "fw-btn fw-btn-sm";
+    prevBtn.textContent = "‹ Prev";
+
+    const pageInfo = document.createElement("span");
+    pageInfo.className = "fw-table-pageinfo";
+
+    const nextBtn = document.createElement("button");
+    nextBtn.type = "button";
+    nextBtn.className = "fw-btn fw-btn-sm";
+    nextBtn.textContent = "Next ›";
+
+    pager.appendChild(pageSizeSelect);
+    pager.appendChild(prevBtn);
+    pager.appendChild(pageInfo);
+    pager.appendChild(nextBtn);
+    footer.appendChild(pager);
+    wrapper.appendChild(footer);
 
     let currentFiltered = allRows;
+    let pageSize = 100;
+    let currentPage = 1;
 
-    function update() {
+    function update(resetPage = true) {
+      if (resetPage) currentPage = 1;
       const q = searchInput.value.trim().toLowerCase();
       const targetCol = colSelect.value;
       const catVal = catSelect ? catSelect.value : "__all__";
@@ -212,8 +257,15 @@ window.FWTable = (function () {
 
       currentFiltered = filtered;
 
+      const n = filtered.length;
+      const totalPages = pageSize > 0 ? Math.max(1, Math.ceil(n / pageSize)) : 1;
+      if (currentPage > totalPages) currentPage = totalPages;
+      const startIdx = pageSize > 0 ? (currentPage - 1) * pageSize : 0;
+      const endIdx = pageSize > 0 ? Math.min(n, startIdx + pageSize) : n;
+      const pageRows = pageSize > 0 ? filtered.slice(startIdx, endIdx) : filtered;
+
       const frag = document.createDocumentFragment();
-      if (filtered.length === 0) {
+      if (pageRows.length === 0) {
         const tr = document.createElement("tr");
         const td = document.createElement("td");
         td.colSpan = Math.max(1, columns.length);
@@ -224,7 +276,7 @@ window.FWTable = (function () {
         tr.appendChild(td);
         frag.appendChild(tr);
       } else {
-        for (const item of filtered) {
+        for (const item of pageRows) {
           const tr = document.createElement("tr");
           if (item.rowClass) tr.className = item.rowClass;
           for (const c of columns) {
@@ -297,15 +349,45 @@ window.FWTable = (function () {
       tbody.appendChild(frag);
 
       const total = allRows.length;
-      const n = filtered.length;
-      const parts = [q || catVal !== "__all__" ? `${n.toLocaleString()} / ${total.toLocaleString()} rows` : `${total.toLocaleString()} rows`];
+      const isPaginated = total > 100 && (pageSize > 0 ? n > pageSize : true);
+      if (total > 100) {
+        pager.style.display = "flex";
+        prevBtn.disabled = currentPage <= 1 || pageSize === 0;
+        nextBtn.disabled = currentPage >= totalPages || pageSize === 0;
+        pageInfo.textContent = pageSize === 0 ? "All" : `Page ${currentPage} / ${totalPages}`;
+      } else {
+        pager.style.display = "none";
+      }
+
+      let countText;
+      if (isPaginated && pageSize > 0 && n > 0) {
+        countText = `Showing ${(startIdx + 1).toLocaleString()}–${endIdx.toLocaleString()} of ${n.toLocaleString()} rows`;
+        if (q || catVal !== "__all__") countText += ` (${total.toLocaleString()} total)`;
+      } else {
+        countText = q || catVal !== "__all__" ? `${n.toLocaleString()} / ${total.toLocaleString()} rows` : `${total.toLocaleString()} rows`;
+      }
+      const parts = [countText];
       if (block.caption) parts.push(block.caption);
       countEl.textContent = parts.join(" · ");
     }
 
-    searchInput.addEventListener("input", update);
-    colSelect.addEventListener("change", update);
-    if (catSelect) catSelect.addEventListener("change", update);
+    searchInput.addEventListener("input", () => update(true));
+    colSelect.addEventListener("change", () => update(true));
+    if (catSelect) catSelect.addEventListener("change", () => update(true));
+    pageSizeSelect.addEventListener("change", () => {
+      pageSize = Number(pageSizeSelect.value) || 0;
+      update(true);
+    });
+    prevBtn.addEventListener("click", () => {
+      if (currentPage > 1) {
+        currentPage -= 1;
+        update(false);
+      }
+    });
+    nextBtn.addEventListener("click", () => {
+      currentPage += 1;
+      update(false);
+    });
     csvBtn.addEventListener("click", () => {
       downloadCsv(
         columns,
@@ -314,7 +396,7 @@ window.FWTable = (function () {
       );
     });
 
-    update();
+    update(true);
     return wrapper;
   }
 

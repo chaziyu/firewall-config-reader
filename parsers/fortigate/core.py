@@ -273,32 +273,120 @@ class FortiGateParser(
                 )
         return dhcp_map
 
+    @staticmethod
+    def _iter_top_level_edits(block: str) -> list[tuple[str, str]]:
+        """Extract top-level `edit "<name>" ... next` entries without truncating on nested blocks."""
+        entries: list[tuple[str, str]] = []
+        current_name: str | None = None
+        buf: list[str] = []
+        depth = 0
+        for line in block.splitlines():
+            stripped = line.strip()
+            if current_name is None:
+                m = re.match(r'^edit\s+"([^"]+)"', stripped)
+                if m:
+                    current_name = m.group(1)
+                    buf = []
+                    depth = 0
+                continue
+            if stripped.startswith("config ") or stripped == "config":
+                depth += 1
+                buf.append(line)
+            elif stripped == "end":
+                if depth > 0:
+                    depth -= 1
+                    buf.append(line)
+                else:
+                    entries.append((current_name, "\n".join(buf)))
+                    current_name = None
+            elif stripped == "next" and depth == 0:
+                entries.append((current_name, "\n".join(buf)))
+                current_name = None
+            else:
+                buf.append(line)
+        return entries
+
+    @staticmethod
+    def _strip_nested_config_blocks(body: str) -> str:
+        """Remove nested `config ... end` sub-blocks so top-level regexes stay scoped."""
+        out: list[str] = []
+        depth = 0
+        for line in body.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("config ") or stripped == "config":
+                depth += 1
+                continue
+            if stripped == "end":
+                if depth > 0:
+                    depth -= 1
+                continue
+            if depth == 0:
+                out.append(line)
+        return "\n".join(out)
+
+    @staticmethod
+    def _extract_subblock(body: str, sub_name: str) -> str:
+        """Extract the inner lines of a direct nested `config <sub_name> ... end` block."""
+        out: list[str] = []
+        depth = 0
+        capturing = False
+        target = f"config {sub_name}"
+        for line in body.splitlines():
+            stripped = line.strip()
+            if not capturing:
+                if depth == 0 and stripped == target:
+                    capturing = True
+                    depth = 1
+                elif stripped.startswith("config ") or stripped == "config":
+                    depth += 1
+                elif stripped == "end" and depth > 0:
+                    depth -= 1
+                continue
+            if stripped.startswith("config ") or stripped == "config":
+                depth += 1
+                out.append(line)
+            elif stripped == "end":
+                depth -= 1
+                if depth <= 0:
+                    break
+                out.append(line)
+            else:
+                out.append(line)
+        return "\n".join(out)
+
     def _parse_raw_interfaces(self, dhcp_map: dict) -> dict:
         interfaces = {}
         block = self._extract_block("system interface")
         if not block:
             return interfaces
-        entries = re.findall(
-            r'^\s*edit "([^"]+)"(.*?)^\s*next', block, re.DOTALL | re.MULTILINE
-        )
-        for name, body in entries:
-            type_m = re.search(r"set type ([\w\-]+)", body)
-            ip_m = re.search(r"set ip ([\d\.]+) ([\d\.]+)", body)
-            acc_m = re.search(r"set allowaccess (.*)", body)
-            parent_m = re.search(r'set interface "([^"]+)"', body)
-            vlan_m = re.search(r"set vlanid (\d+)", body)
-            alias_m = re.search(r'set alias "([^"]+)"', body)
-            role_m = re.search(r"set role ([\w\-]+)", body)
-            vdom_m = re.search(r'set vdom "([^"]+)"', body)
-            status_m = re.search(r"set status (enable|disable)", body)
+        for name, body in self._iter_top_level_edits(block):
+            top_body = self._strip_nested_config_blocks(body)
+            type_m = re.search(r"^\s*set type ([\w\-]+)", top_body, re.MULTILINE)
+            ip_m = re.search(r"^\s*set ip ([\d\.]+) ([\d\.]+)", top_body, re.MULTILINE)
+            mode_m = re.search(r"^\s*set mode (static|dhcp|pppoe)\b", top_body, re.MULTILINE)
+            acc_m = re.search(r"^\s*set allowaccess (.*)", top_body, re.MULTILINE)
+            parent_m = re.search(r'^\s*set interface "([^"]+)"', top_body, re.MULTILINE)
+            vlan_m = re.search(r"^\s*set vlanid (\d+)", top_body, re.MULTILINE)
+            alias_m = re.search(r'^\s*set alias "([^"]+)"', top_body, re.MULTILINE)
+            desc_m = re.search(r'^\s*set description "([^"]+)"', top_body, re.MULTILINE)
+            role_m = re.search(r"^\s*set role ([\w\-]+)", top_body, re.MULTILINE)
+            ded_mgmt = bool(re.search(r"^\s*set dedicated-to management\b", top_body, re.MULTILINE))
+            vdom_m = re.search(r'^\s*set vdom "([^"]+)"', top_body, re.MULTILINE)
+            status_m = re.search(r"^\s*set status (up|down|enable|disable)\b", top_body, re.MULTILINE)
+            vrf_m = re.search(r"^\s*set vrf (\d+)\b", top_body, re.MULTILINE)
+            mtu_ovr = bool(re.search(r"^\s*set mtu-override enable\b", top_body, re.MULTILINE))
+            mtu_m = re.search(r"^\s*set mtu (\d+)\b", top_body, re.MULTILINE)
+            relay_on = bool(re.search(r"^\s*set dhcp-relay-service enable\b", top_body, re.MULTILINE))
+            relay_m = re.search(r"^\s*set dhcp-relay-ip (.*)", top_body, re.MULTILINE)
+
             # Hardware switch members: set member "portA" "portB"
-            mem_raw = re.search(r"set member (.*)", body)
+            mem_raw = re.search(r"^\s*set member (.*)", top_body, re.MULTILINE)
             members = ""
             if mem_raw:
                 members = " ".join(re.findall(r'"([^"]+)"', mem_raw.group(1)))
             # Also handle set members (typo variant)
             if not members:
-                mem_m2 = re.search(r'set (?:memebrs|members) "([^"]+)"', body)
+                mem_m2 = re.search(r'^\s*set (?:memebrs|members) "([^"]+)"', top_body, re.MULTILINE)
                 if mem_m2:
                     members = mem_m2.group(1).replace('"', "")
 
@@ -326,19 +414,78 @@ class FortiGateParser(
 
             is_sub = bool(vlan_m) or raw_type == "vlan"
 
+            # Normalize status (FortiOS uses up/down and enable/disable)
+            raw_status = status_m.group(1).lower() if status_m else "up"
+            norm_status = "Disable" if raw_status in ("down", "disable") else "Enable"
+
+            # Addressing mode fallback for DHCP / PPPoE WAN links
+            if ip_m:
+                ip_display = f"{ip_m.group(1)}/{ip_m.group(2)}"
+            elif mode_m and mode_m.group(1).lower() == "dhcp":
+                ip_display = "DHCP"
+            elif mode_m and mode_m.group(1).lower() == "pppoe":
+                ip_display = "PPPoE"
+            else:
+                ip_display = "-"
+
+            # Nested config secondaryip
+            sec_ips: list[str] = []
+            sec_block = self._extract_subblock(body, "secondaryip")
+            if sec_block:
+                for sec_entry in re.findall(r"^\s*edit \d+(.*?)^\s*next", sec_block, re.DOTALL | re.MULTILINE):
+                    sip_m = re.search(r"set ip ([\d\.]+) ([\d\.]+)", sec_entry)
+                    if not sip_m:
+                        continue
+                    sacc_m = re.search(r"set allowaccess (.*)", sec_entry)
+                    s_txt = f"{sip_m.group(1)}/{sip_m.group(2)}"
+                    if sacc_m:
+                        s_acc = sacc_m.group(1).strip().upper().replace(" ", ", ")
+                        if s_acc:
+                            s_txt += f" ({s_acc})"
+                    sec_ips.append(s_txt)
+
+            # Nested config ipv6
+            ipv6_display = "-"
+            v6_block = self._extract_subblock(body, "ipv6")
+            if v6_block:
+                v6_m = re.search(r"set ip6-address (\S+)", v6_block)
+                if v6_m and v6_m.group(1) != "::/0":
+                    ipv6_display = v6_m.group(1)
+
+            # Role & Dedicated Mgmt
+            role_display = role_m.group(1).capitalize() if role_m else "-"
+            if ded_mgmt:
+                role_display = "Management" if role_display == "-" else f"{role_display} (Mgmt)"
+
+            # DHCP Range / Relay
+            dhcp_val = dhcp_map.get(name, "-")
+            if dhcp_val == "-" and relay_on and relay_m:
+                r_ips = re.findall(r'"([^"]+)"', relay_m.group(1))
+                r_str = ", ".join(r_ips) if r_ips else relay_m.group(1).strip()
+                if r_str:
+                    dhcp_val = f"Relay: {r_str}"
+
+            mtu_display = mtu_m.group(1) if (mtu_m and (mtu_ovr or mtu_m.group(1) != "1500")) else "-"
+            vrf_display = vrf_m.group(1) if (vrf_m and vrf_m.group(1) != "0") else "-"
+
             interfaces[name] = {
                 "Name": name,
                 "Alias": alias_m.group(1) if alias_m else "-",
                 "VDOM": vdom_m.group(1) if vdom_m else "-",
                 "Type": itype,
-                "Role": role_m.group(1).capitalize() if role_m else "-",
+                "Role": role_display,
                 "Members": members if members else "-",
-                "IP/Netmask": f"{ip_m.group(1)}/{ip_m.group(2)}" if ip_m else "-",
+                "IP/Netmask": ip_display,
+                "Secondary IPs": ", ".join(sec_ips) if sec_ips else "-",
+                "IPv6": ipv6_display,
+                "VRF": vrf_display,
+                "MTU": mtu_display,
                 "Admin Access": (
-                    acc_m.group(1).upper().replace(" ", ", ") if acc_m else "-"
+                    acc_m.group(1).strip().upper().replace(" ", ", ") if acc_m else "-"
                 ),
-                "DHCP Range": dhcp_map.get(name, "-"),
-                "Status": status_m.group(1).capitalize() if status_m else "Enable",
+                "DHCP Range": dhcp_val,
+                "Description": desc_m.group(1) if desc_m else "-",
+                "Status": norm_status,
                 "Parent": parent_m.group(1) if parent_m else None,
                 "_is_sub": is_sub,
             }
@@ -373,6 +520,17 @@ class FortiGateParser(
         interfaces = self._parse_raw_interfaces(dhcp_map)
         zones = self._parse_zones()
 
+        sdwan_zone_map: dict[str, str] = {}
+        try:
+            sdwan = self.parse_sdwan() or {}
+            for m in sdwan.get("members", []) or []:
+                iname = str(m.get("Interface") or m.get("interface") or "").strip()
+                zname = str(m.get("Zone") or m.get("zone") or "").strip()
+                if iname and iname != "-" and zname:
+                    sdwan_zone_map[iname] = zname
+        except Exception:
+            pass
+
         final_rows = []
         seen = set()
 
@@ -381,6 +539,12 @@ class FortiGateParser(
                 return
             item = interfaces[name]
             prefix = "\u00a0\u00a0\u00a0" * level + ("\u2517 " if level > 0 else "")
+            if zone_name:
+                zone_display = zone_name
+            elif name in sdwan_zone_map:
+                zone_display = f"SD-WAN: {sdwan_zone_map[name]}"
+            else:
+                zone_display = "-"
             row = {
                 "Name": prefix + item["Name"],
                 "Alias": item["Alias"],
@@ -389,10 +553,15 @@ class FortiGateParser(
                 "Role": item["Role"],
                 "Members": item["Members"],
                 "IP/Netmask": item["IP/Netmask"],
+                "Secondary IPs": item["Secondary IPs"],
+                "IPv6": item["IPv6"],
+                "VRF": item["VRF"],
+                "MTU": item["MTU"],
                 "Admin Access": item["Admin Access"],
                 "DHCP Range": item["DHCP Range"],
+                "Description": item["Description"],
                 "Status": item["Status"],
-                "Zone": zone_name if zone_name else "-",
+                "Zone": zone_display,
                 "_is_sub": bool(item.get("_is_sub")) or is_sub_child,
                 "_in_zone": bool(zone_name),
             }
@@ -422,8 +591,13 @@ class FortiGateParser(
                     "Role": "-",
                     "Members": ", ".join(z["members"]),
                     "IP/Netmask": "-",
+                    "Secondary IPs": "-",
+                    "IPv6": "-",
+                    "VRF": "-",
+                    "MTU": "-",
                     "Admin Access": "-",
                     "DHCP Range": "-",
+                    "Description": "-",
                     "Status": "Enable",
                     "Zone": z["zone_name"],
                 }
@@ -443,6 +617,11 @@ class FortiGateParser(
                 add_node(name, level=1, zone_name=zone_member_map.get(name), is_sub_child=True)
 
         return final_rows
+
+    def is_central_nat_enabled(self) -> bool:
+        """Return True if FortiOS central-nat is enabled under system settings."""
+        block = self._extract_block("system settings")
+        return bool(block and re.search(r"^\s*set central-nat enable\b", block, re.MULTILINE))
 
     def parse_policies(self) -> list:
         block = self._extract_block("firewall policy")
@@ -468,6 +647,15 @@ class FortiGateParser(
                 vals = re.findall(r'"([^"]+)"', m.group(1))
                 return ", ".join(vals) if vals else m.group(1).strip()
 
+            pool_m = re.search(r"set poolname (.*)", body)
+            pool_names = re.findall(r'"([^"]+)"', pool_m.group(1)) if pool_m else []
+            if pool_m and not pool_names:
+                raw_pool = pool_m.group(1).strip()
+                if raw_pool:
+                    pool_names = [raw_pool]
+            port_pres_m = re.search(r"set port-preserve (enable|disable)", body)
+            natip_m = re.search(r"set natip ([\d\.\s/]+)", body)
+
             has_profile = bool(
                 re.search(
                     r"set\s+(?:utm-status\s+enable|(?:av-profile|webfilter-profile|dnsfilter-profile|ips-sensor|application-list|file-filter-profile|emailfilter-profile|waf-profile|profile-group)\s+)",
@@ -490,6 +678,15 @@ class FortiGateParser(
                     "Status": status_m.group(1).capitalize() if status_m else "Enable",
                     "Log": log_m.group(1).capitalize() if log_m else "-",
                     "_has_profile": has_profile,
+                    "_ippool": bool(re.search(r"^\s*set ippool enable\b", body, re.MULTILINE)),
+                    "_poolname": pool_names,
+                    "_fixedport": bool(re.search(r"^\s*set fixedport enable\b", body, re.MULTILINE)),
+                    "_port_preserve": port_pres_m.group(1) if port_pres_m else "",
+                    "_nat64": bool(re.search(r"^\s*set nat64 enable\b", body, re.MULTILINE)),
+                    "_nat46": bool(re.search(r"^\s*set nat46 enable\b", body, re.MULTILINE)),
+                    "_natinbound": bool(re.search(r"^\s*set natinbound enable\b", body, re.MULTILINE)),
+                    "_natoutbound": bool(re.search(r"^\s*set natoutbound enable\b", body, re.MULTILINE)),
+                    "_natip": natip_m.group(1).strip() if natip_m else "",
                 }
             )
         return rows
@@ -828,6 +1025,66 @@ class FortiGateParser(
                 )
         return rows
 
+    def parse_central_snat(self) -> list:
+        """Parse firewall central-snat-map entries."""
+        block = self._extract_block("firewall central-snat-map")
+        if not block:
+            return []
+        rows = []
+        entries = re.findall(
+            r"^\s*edit (\d+)(.*?)^\s*next", block, re.DOTALL | re.MULTILINE
+        )
+        for policy_id, body in entries:
+            def _multi(kw: str, default: str = "-") -> tuple[str, list[str]]:
+                m = re.search(rf"^\s*set {kw} (.*)", body, re.MULTILINE)
+                if not m:
+                    return default, []
+                vals = re.findall(r'"([^"]+)"', m.group(1))
+                if vals:
+                    return ", ".join(vals), vals
+                raw = m.group(1).strip()
+                return (raw or default), ([raw] if raw else [])
+
+            srcintf, _ = _multi("srcintf")
+            dstintf, _ = _multi("dstintf")
+            orig_addr, _ = _multi("orig-addr")
+            if orig_addr == "-":
+                orig_addr, _ = _multi("orig-addr6")
+            dst_addr, _ = _multi("dst-addr")
+            if dst_addr == "-":
+                dst_addr, _ = _multi("dst-addr6")
+            ippool_str, pool_list = _multi("nat-ippool")
+            if ippool_str == "-":
+                ippool_str, pool_list = _multi("nat-ippool6")
+
+            nat_m = re.search(r"^\s*set nat (enable|disable)\b", body, re.MULTILINE)
+            status_m = re.search(r"^\s*set status (enable|disable)\b", body, re.MULTILINE)
+            proto_m = re.search(r"^\s*set protocol (\S+)", body, re.MULTILINE)
+            orig_port_m = re.search(r"^\s*set orig-port (\S+)", body, re.MULTILINE)
+            nat_port_m = re.search(r"^\s*set nat-port (\S+)", body, re.MULTILINE)
+            pres_m = re.search(r"^\s*set port-preserve (enable|disable)\b", body, re.MULTILINE)
+            cmt_m = re.search(r'^\s*set comments "([^"]+)"', body, re.MULTILINE)
+
+            rows.append(
+                {
+                    "ID": policy_id,
+                    "Src Interface": srcintf,
+                    "Dst Interface": dstintf,
+                    "Orig Address": orig_addr,
+                    "Dst Address": dst_addr,
+                    "NAT": nat_m.group(1).capitalize() if nat_m else "Enable",
+                    "IP Pool": ippool_str,
+                    "Protocol": proto_m.group(1) if proto_m else "Any",
+                    "Orig Port": orig_port_m.group(1) if orig_port_m else "Any",
+                    "NAT Port": nat_port_m.group(1) if nat_port_m else "-",
+                    "Port Preserve": pres_m.group(1).capitalize() if pres_m else "-",
+                    "Status": status_m.group(1).capitalize() if status_m else "Enable",
+                    "Comment": cmt_m.group(1) if cmt_m else "-",
+                    "_pool_list": pool_list,
+                }
+            )
+        return rows
+
     def parse_vip(self) -> list:
         block = self._extract_block("firewall vip")
         if not block:
@@ -837,23 +1094,48 @@ class FortiGateParser(
             r'^\s*edit "([^"]+)"(.*?)^\s*next', block, re.DOTALL | re.MULTILINE
         )
         for name, body in entries:
-            extip_m = re.search(r"set extip ([\d\.]+)", body)
-            mappedip_m = re.search(r'set mappedip "([^"]+)"', body)
+            extip_m = re.search(r"set extip ([\d\.\-]+)", body)
+            extaddr_m = re.search(r"set extaddr (.*)", body)
+            mappedip_m = re.search(r"set mappedip (.*)", body)
             extintf_m = re.search(r'set extintf "([^"]+)"', body)
             service_m = re.search(r"set service (.*)", body)
-            extport_m = re.search(r"set extport (\d+)", body)
-            mappedport_m = re.search(r"set mappedport (\d+)", body)
+            extport_m = re.search(r"set extport ([\d\-]+)", body)
+            mappedport_m = re.search(r"set mappedport ([\d\-]+)", body)
             type_m = re.search(r"set type (\S+)", body)
             proto_m = re.search(r"set protocol (\S+)", body)
-            ext_display = extip_m.group(1) if extip_m else "-"
+            portfwd_m = re.search(r"set portforward (enable|disable)", body)
+            srcfilter_m = re.search(r"set src-filter (.*)", body)
+            arp_m = re.search(r"set arp-reply (enable|disable)", body)
+            natsrc_m = re.search(r"set nat-source-vip (enable|disable)", body)
+            status_m = re.search(r"set status (enable|disable)", body)
+            cmt_m = re.search(r'set comment "([^"]+)"', body)
+
+            if extip_m:
+                ext_display = extip_m.group(1)
+            elif extaddr_m:
+                ext_addrs = re.findall(r'"([^"]+)"', extaddr_m.group(1))
+                ext_display = ", ".join(ext_addrs) if ext_addrs else extaddr_m.group(1).strip() or "-"
+            else:
+                ext_display = "-"
             if extport_m:
                 ext_display += f":{extport_m.group(1)}"
-            map_display = mappedip_m.group(1) if mappedip_m else "-"
+
+            if mappedip_m:
+                mapped_vals = re.findall(r'"([^"]+)"', mappedip_m.group(1))
+                map_display = ", ".join(mapped_vals) if mapped_vals else mappedip_m.group(1).strip() or "-"
+            else:
+                map_display = "-"
             if mappedport_m:
                 map_display += f":{mappedport_m.group(1)}"
+
             services = ""
             if service_m:
                 services = ", ".join(re.findall(r'"([^"]+)"', service_m.group(1)))
+            src_filter = ""
+            if srcfilter_m:
+                sf_vals = re.findall(r'"([^"]+)"', srcfilter_m.group(1))
+                src_filter = ", ".join(sf_vals) if sf_vals else srcfilter_m.group(1).strip()
+
             rows.append(
                 {
                     "Name": name,
@@ -867,6 +1149,37 @@ class FortiGateParser(
                     "Service": services or "-",
                     "Mapped From": ext_display,
                     "Mapped To": map_display,
+                    "Port Forward": portfwd_m.group(1).capitalize() if portfwd_m else "Disable",
+                    "Src Filter": src_filter or "-",
+                    "ARP Reply": arp_m.group(1).capitalize() if arp_m else "Enable",
+                    "NAT Source VIP": natsrc_m.group(1).capitalize() if natsrc_m else "Disable",
+                    "Comment": cmt_m.group(1) if cmt_m else "-",
+                    "_status": status_m.group(1).capitalize() if status_m else "Enable",
+                }
+            )
+        return rows
+
+    def parse_vip_groups(self) -> list:
+        """Parse firewall vipgrp entries."""
+        block = self._extract_block("firewall vipgrp")
+        if not block:
+            return []
+        rows = []
+        entries = re.findall(
+            r'^\s*edit "([^"]+)"(.*?)^\s*next', block, re.DOTALL | re.MULTILINE
+        )
+        for name, body in entries:
+            intf_m = re.search(r'set interface "([^"]+)"', body)
+            mem_m = re.search(r"set member (.*)", body)
+            cmt_m = re.search(r'set comments "([^"]+)"', body)
+            members = re.findall(r'"([^"]+)"', mem_m.group(1)) if mem_m else []
+            rows.append(
+                {
+                    "Name": name,
+                    "Interface": intf_m.group(1) if intf_m else "any",
+                    "Members": ", ".join(members) if members else "-",
+                    "Comment": cmt_m.group(1) if cmt_m else "-",
+                    "_member_list": members,
                 }
             )
         return rows
@@ -882,9 +1195,31 @@ class FortiGateParser(
         for name, body in entries:
             start_m = re.search(r"set startip ([\d\.]+)", body)
             end_m = re.search(r"set endip ([\d\.]+)", body)
+            s_start_m = re.search(r"set source-startip ([\d\.]+)", body)
+            s_end_m = re.search(r"set source-endip ([\d\.]+)", body)
+            sp_m = re.search(r"set startport (\d+)", body)
+            ep_m = re.search(r"set endport (\d+)", body)
+            assoc_m = re.search(r'set associated-interface "([^"]+)"', body)
+            excl_m = re.search(r"set exclude-ip (.*)", body)
             type_m = re.search(r"set type (\S+)", body)
             arp_m = re.search(r"set arp-reply (enable|disable)", body)
             comment_m = re.search(r'set comments "([^"]+)"', body)
+
+            src_range = (
+                f"{s_start_m.group(1) if s_start_m else '-'} - {s_end_m.group(1) if s_end_m else '-'}"
+                if (s_start_m or s_end_m)
+                else "-"
+            )
+            port_range = (
+                f"{sp_m.group(1) if sp_m else '-'} - {ep_m.group(1) if ep_m else '-'}"
+                if (sp_m or ep_m)
+                else "-"
+            )
+            excl_str = "-"
+            if excl_m:
+                excl_vals = re.findall(r'"([^"]+)"', excl_m.group(1))
+                excl_str = ", ".join(excl_vals) if excl_vals else (excl_m.group(1).strip() or "-")
+
             rows.append(
                 {
                     "Name": name,
@@ -894,6 +1229,10 @@ class FortiGateParser(
                         if type_m
                         else "Overload"
                     ),
+                    "Source IP Range": src_range,
+                    "Port Range": port_range,
+                    "Associated Interface": assoc_m.group(1) if assoc_m else "-",
+                    "Exclude IP": excl_str,
                     "ARP Reply": arp_m.group(1).capitalize() if arp_m else "Enable",
                     "Comment": comment_m.group(1) if comment_m else "-",
                 }

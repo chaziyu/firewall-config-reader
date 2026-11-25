@@ -21,7 +21,11 @@ from backend.lifecycle_service import (
     evaluate_paloalto_lifecycle,
 )
 from backend.posture_service import evaluate_fortigate_posture, evaluate_paloalto_posture
-from backend.vpn_inspector_service import inspect_fortigate_vpns, inspect_paloalto_vpns
+from backend.vpn_inspector_service import (
+    format_vpn_findings_summary,
+    inspect_fortigate_vpns,
+    inspect_paloalto_vpns,
+)
 
 
 def _e(val: Any) -> str:
@@ -133,7 +137,7 @@ def _render_report_document(
             "Routes": str(v["active_route_count"]),
             "Allow Policies": str(v["allow_policy_count"]),
             "Status": f"Error ({len(v['errors'])})" if v["errors"] else (f"Warning ({len(v['warnings'])})" if v["warnings"] else "Healthy"),
-            "Findings": "; ".join(v["errors"] + v["warnings"]) or "All 4 layers verified",
+            "Findings": format_vpn_findings_summary(v),
         }
         for v in vpn_inspections
     ]
@@ -347,6 +351,6 @@ def generate_paloalto_audit_report_html(parsers: dict[str, Any], filename: str) 
         exposure_findings=find_paloalto_public_mgmt_exposure(net, device_parser=dev, dashboard_parser=dash),
         certs=inspect_paloalto_certificates(dev),
         vpn_inspections=inspect_paloalto_vpns(net, pol) if net is not None else [],
-        audit_result=run_paloalto_audit({"Policies": pol, "Objects": obj, "Network": net}),
+        audit_result=run_paloalto_audit({"Policies": pol, "Objects": obj, "Network": net, "Device": dev}),
         hygiene_result=analyze_paloalto_hygiene({"Policies": pol, "Objects": obj}),
     )

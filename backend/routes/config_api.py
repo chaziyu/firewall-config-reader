@@ -5,6 +5,7 @@ JSON API routes for Palo Alto and FortiGate sections + Policy Match / Policy Loo
 
 from __future__ import annotations
 
+import gc
 from pathlib import PurePath
 import re
 
@@ -22,7 +23,7 @@ def _require_config_session(request: Request, expected_vendor: str) -> SessionDa
     sess = store.get_existing(request)
     if not is_authenticated(sess):
         raise HTTPException(status_code=401, detail="Authentication required.")
-    if sess is None or not sess.raw_content or sess.vendor != expected_vendor:
+    if sess is None or sess._sealed_content is None or sess.vendor != expected_vendor:
         raise HTTPException(status_code=404, detail=f"No active {expected_vendor} configuration loaded.")
     return sess
 
@@ -36,7 +37,7 @@ def get_paloalto_lifecycle(request: Request):
 
     sess = _require_config_session(request, "Palo Alto")
     try:
-        parsers = store.get_palo_alto_parsers(sess.content_hash or "", sess.raw_content or b"")
+        parsers = store.get_palo_alto_parsers_for_session(sess)
         info = parsers["Dashboard"].get_system_info()
         lifecycle = evaluate_paloalto_lifecycle(
             info.get("software_version"),
@@ -55,7 +56,7 @@ async def get_paloalto_section(section: str, request: Request):
 
     sess = _require_config_session(request, "Palo Alto")
     try:
-        parsers = store.get_palo_alto_parsers(sess.content_hash or "", sess.raw_content or b"")
+        parsers = store.get_palo_alto_parsers_for_session(sess)
         return build_paloalto_section(section, parsers, allow_probe=is_loopback_request(request))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -79,7 +80,7 @@ class PaPolicyTestRequest(BaseModel):
 @router.post("/pa/policy-test")
 async def pa_policy_test(body: PaPolicyTestRequest, request: Request):
     sess = _require_config_session(request, "Palo Alto")
-    parsers = store.get_palo_alto_parsers(sess.content_hash or "", sess.raw_content or b"")
+    parsers = store.get_palo_alto_parsers_for_session(sess)
     pol_parser = parsers["Policies"]
     res = pol_parser.test_policy_match(
         body.policy_type,
@@ -93,19 +94,92 @@ async def pa_policy_test(body: PaPolicyTestRequest, request: Request):
         body.dst_port,
         body.protocol,
     )
-    payload: dict = {"matched": bool(res.get("matched")), "reason": res.get("reason", "")}
     rule = res.get("rule")
-    if rule and isinstance(rule, dict):
-        cols = [k for k in rule.keys() if not str(k).startswith("_")]
-        payload["table"] = {
-            "type": "table",
-            "id": f"pa_match_{body.policy_type}",
-            "columns": cols,
-            "rows": [{c: str(rule.get(c, "")) for c in cols}],
-            "row_classes": ["row-success"],
-            "export_filename": f"pa_match_{body.policy_type}.csv",
+    shadowed = res.get("shadowed") or []
+    if not res.get("matched") or not isinstance(rule, dict):
+        reason = res.get("reason") or "No policy matched all criteria. Traffic hits Implicit Default Deny."
+        return {
+            "matched": False,
+            "reason": reason,
+            "blocks": [
+                {
+                    "type": "alert",
+                    "variant": "error",
+                    "text": f"No Matching Policy — Implicit DENY. {reason}",
+                }
+            ],
         }
-    return payload
+
+    action = str(rule.get("Action", "ALLOW")).upper()
+    is_allow = action in ("ALLOW", "ACCEPT", "PERMIT", "FORWARD")
+    cols = [k for k in rule.keys() if not str(k).startswith("_")]
+    table_blk = {
+        "type": "table",
+        "id": f"pa_match_{body.policy_type}",
+        "columns": cols,
+        "rows": [{c: str(rule.get(c, "")) for c in cols}],
+        "row_classes": ["row-success" if is_allow else "row-danger"],
+        "legend": [
+            {"label": "Matched Allow Rule (green)", "variant": "success"},
+            {"label": "Matched Deny/Drop Rule (red)", "variant": "danger"},
+        ],
+        "export_filename": f"pa_match_{body.policy_type}.csv",
+    }
+
+    rule_name = rule.get("Rule Name", "-")
+    priority = rule.get("Priority (Index)", "-")
+    blocks: list[dict] = [
+        {
+            "type": "card",
+            "title": f"First Matching Rule: #{priority} — {rule_name}",
+            "badge": {"text": action, "variant": "allow" if is_allow else "deny"},
+        },
+        {
+            "type": "kv_grid",
+            "items": [
+                {"label": "Rule Name", "value": str(rule_name)},
+                {"label": "Priority (Index)", "value": f"#{priority}"},
+                {"label": "Action", "value": action},
+                {"label": "Zones", "value": f"{rule.get('Source Zone', 'any')} → {rule.get('Dest Zone', 'any')}"},
+                {"label": "Service", "value": str(rule.get("Service", "any"))},
+            ],
+        },
+        table_blk,
+    ]
+
+    if shadowed:
+        blocks.append(
+            {
+                "type": "alert",
+                "variant": "warn",
+                "text": f"{len(shadowed)} subsequent shadowed rule(s) would also match this traffic after #{priority} ({rule_name}).",
+            }
+        )
+        blocks.append(
+            {
+                "type": "expander",
+                "title": f"Shadowed / Subsequent Matches ({len(shadowed)})",
+                "open": False,
+                "blocks": [
+                    {
+                        "type": "table",
+                        "id": f"pa_match_{body.policy_type}_shadowed",
+                        "columns": cols,
+                        "rows": [{c: str(r.get(c, "")) for c in cols} for r in shadowed],
+                        "row_classes": ["row-warn"] * len(shadowed),
+                        "legend": [{"label": "Shadowed Rule (amber)", "variant": "warn"}],
+                        "export_filename": f"pa_match_{body.policy_type}_shadowed.csv",
+                    }
+                ],
+            }
+        )
+
+    return {
+        "matched": True,
+        "reason": res.get("reason", ""),
+        "table": table_blk,
+        "blocks": blocks,
+    }
 
 
 @router.get("/fg/lifecycle")
@@ -117,7 +191,7 @@ def get_fortigate_lifecycle(request: Request):
 
     sess = _require_config_session(request, "FortiGate")
     try:
-        fg = store.get_fortigate_parser(sess.content_hash or "", sess.raw_content or b"")
+        fg = store.get_fortigate_parser_for_session(sess)
         model = fg.get_model()
         firmware = fg.get_firmware_version()
         lifecycle = evaluate_fortigate_lifecycle(model, firmware, cache_only=False)
@@ -133,7 +207,7 @@ def get_fortigate_section(section: str, request: Request):
 
     sess = _require_config_session(request, "FortiGate")
     try:
-        fg = store.get_fortigate_parser(sess.content_hash or "", sess.raw_content or b"")
+        fg = store.get_fortigate_parser_for_session(sess)
         return build_fortigate_section(section, fg, allow_probe=is_loopback_request(request))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -154,7 +228,7 @@ async def fg_policy_lookup(body: FgPolicyLookupRequest, request: Request):
     from backend.policy_lookup_service import evaluate_fortigate_lookup_detailed
 
     sess = _require_config_session(request, "FortiGate")
-    fg = store.get_fortigate_parser(sess.content_hash or "", sess.raw_content or b"")
+    fg = store.get_fortigate_parser_for_session(sess)
     result = evaluate_fortigate_lookup_detailed(
         fg,
         src_iface=body.src_iface,
@@ -331,7 +405,7 @@ async def fg_route_lookup(body: FgRouteLookupRequest, request: Request):
     from backend.route_lookup_service import lookup_fortigate_route
 
     sess = _require_config_session(request, "FortiGate")
-    fg = store.get_fortigate_parser(sess.content_hash or "", sess.raw_content or b"")
+    fg = store.get_fortigate_parser_for_session(sess)
     res = lookup_fortigate_route(fg, body.dest_ip)
     return _build_route_lookup_response(res, "FortiGate")
 
@@ -341,7 +415,7 @@ async def pa_route_lookup(body: PaRouteLookupRequest, request: Request):
     from backend.route_lookup_service import lookup_paloalto_route
 
     sess = _require_config_session(request, "Palo Alto")
-    parsers = store.get_palo_alto_parsers(sess.content_hash or "", sess.raw_content or b"")
+    parsers = store.get_palo_alto_parsers_for_session(sess)
     res = lookup_paloalto_route(parsers["Network"], body.dest_ip, body.virtual_router)
     return _build_route_lookup_response(res, "Palo Alto")
 
@@ -355,7 +429,7 @@ async def fg_where_used(body: WhereUsedRequest, request: Request):
     from backend.where_used_service import build_where_used_blocks, search_fortigate_where_used
 
     sess = _require_config_session(request, "FortiGate")
-    fg = store.get_fortigate_parser(sess.content_hash or "", sess.raw_content or b"")
+    fg = store.get_fortigate_parser_for_session(sess)
     res = search_fortigate_where_used(fg, body.query)
     found, blocks = build_where_used_blocks(res)
     return {"found": found, "blocks": blocks}
@@ -366,7 +440,7 @@ async def pa_where_used(body: WhereUsedRequest, request: Request):
     from backend.where_used_service import build_where_used_blocks, search_paloalto_where_used
 
     sess = _require_config_session(request, "Palo Alto")
-    parsers = store.get_palo_alto_parsers(sess.content_hash or "", sess.raw_content or b"")
+    parsers = store.get_palo_alto_parsers_for_session(sess)
     res = search_paloalto_where_used(parsers, body.query)
     found, blocks = build_where_used_blocks(res)
     return {"found": found, "blocks": blocks}
@@ -386,7 +460,7 @@ def fg_exposure_probe(request: Request):
             detail="Live reachability probe is only available on direct local/desktop sessions.",
         )
     sess = _require_config_session(request, "FortiGate")
-    fg = store.get_fortigate_parser(sess.content_hash or "", sess.raw_content or b"")
+    fg = store.get_fortigate_parser_for_session(sess)
     findings = find_fortigate_public_mgmt_exposure(fg)
     results = probe_exposure_targets(findings)
     return build_exposure_probe_blocks(results)
@@ -406,7 +480,7 @@ def pa_exposure_probe(request: Request):
             detail="Live reachability probe is only available on direct local/desktop sessions.",
         )
     sess = _require_config_session(request, "Palo Alto")
-    parsers = store.get_palo_alto_parsers(sess.content_hash or "", sess.raw_content or b"")
+    parsers = store.get_palo_alto_parsers_for_session(sess)
     findings = find_paloalto_public_mgmt_exposure(
         parsers["Network"],
         device_parser=parsers.get("Device"),
@@ -455,7 +529,7 @@ def fg_config_diff(request: Request, file: UploadFile = File(...)):
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Failed to parse FortiGate comparison config: {exc}") from exc
 
-    before_fg = store.get_fortigate_parser(sess.content_hash or "", sess.raw_content or b"")
+    before_fg = store.get_fortigate_parser_for_session(sess)
     diff_res = diff_fortigate_configs(before_fg, after_fg)
     return build_config_diff_blocks(diff_res, sess.filename or "Current Config", after_name)
 
@@ -488,7 +562,7 @@ def pa_config_diff(request: Request, file: UploadFile = File(...)):
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Failed to parse Palo Alto comparison XML: {exc}") from exc
 
-    before_parsers = store.get_palo_alto_parsers(sess.content_hash or "", sess.raw_content or b"")
+    before_parsers = store.get_palo_alto_parsers_for_session(sess)
     diff_res = diff_paloalto_configs(before_parsers, after_parsers)
     return build_config_diff_blocks(diff_res, sess.filename or "Current Config", after_name)
 
@@ -499,6 +573,7 @@ class PacketTraceRequest(BaseModel):
     dst_port: str = "443"
     protocol: str = "tcp"
     virtual_router: str = "all"
+    check_return: bool = True
 
 
 @router.post("/fg/packet-trace")
@@ -506,8 +581,15 @@ def fg_packet_trace(body: PacketTraceRequest, request: Request):
     from backend.packet_trace_service import build_packet_trace_blocks, trace_fortigate_packet
 
     sess = _require_config_session(request, "FortiGate")
-    fg = store.get_fortigate_parser(sess.content_hash or "", sess.raw_content or b"")
-    trace = trace_fortigate_packet(fg, body.src_ip, body.dst_ip, body.dst_port, body.protocol)
+    fg = store.get_fortigate_parser_for_session(sess)
+    trace = trace_fortigate_packet(
+        fg,
+        body.src_ip,
+        body.dst_ip,
+        body.dst_port,
+        body.protocol,
+        check_return=body.check_return,
+    )
     return build_packet_trace_blocks(trace)
 
 
@@ -516,7 +598,7 @@ def pa_packet_trace(body: PacketTraceRequest, request: Request):
     from backend.packet_trace_service import build_packet_trace_blocks, trace_paloalto_packet
 
     sess = _require_config_session(request, "Palo Alto")
-    parsers = store.get_palo_alto_parsers(sess.content_hash or "", sess.raw_content or b"")
+    parsers = store.get_palo_alto_parsers_for_session(sess)
     trace = trace_paloalto_packet(
         parsers,
         body.src_ip,
@@ -524,6 +606,7 @@ def pa_packet_trace(body: PacketTraceRequest, request: Request):
         body.dst_port,
         body.protocol,
         body.virtual_router,
+        check_return=body.check_return,
     )
     return build_packet_trace_blocks(trace)
 
@@ -540,15 +623,15 @@ def export_audit_report(request: Request):
     sess = store.get_existing(request)
     if not is_authenticated(sess):
         raise HTTPException(status_code=401, detail="Authentication required.")
-    if sess is None or not sess.raw_content or sess.vendor not in ("Palo Alto", "FortiGate"):
+    if sess is None or sess._sealed_content is None or sess.vendor not in ("Palo Alto", "FortiGate"):
         raise HTTPException(status_code=404, detail="No active firewall configuration loaded.")
 
     fname = sess.filename or "firewall_config"
     if sess.vendor == "Palo Alto":
-        parsers = store.get_palo_alto_parsers(sess.content_hash or "", sess.raw_content)
+        parsers = store.get_palo_alto_parsers_for_session(sess)
         html_bytes = generate_paloalto_audit_report_html(parsers, fname)
     else:
-        fg = store.get_fortigate_parser(sess.content_hash or "", sess.raw_content)
+        fg = store.get_fortigate_parser_for_session(sess)
         html_bytes = generate_fortigate_audit_report_html(fg, fname)
 
     stem = PurePath(fname).stem
@@ -581,15 +664,16 @@ def export_config_excel(request: Request):
     sess = store.get_existing(request)
     if not is_authenticated(sess):
         raise HTTPException(status_code=401, detail="Authentication required.")
-    if sess is None or not sess.raw_content or sess.vendor not in ("Palo Alto", "FortiGate"):
+    if sess is None or sess._sealed_content is None or sess.vendor not in ("Palo Alto", "FortiGate"):
         raise HTTPException(status_code=404, detail="No active firewall configuration loaded.")
 
     if sess.vendor == "Palo Alto":
-        parsers = store.get_palo_alto_parsers(sess.content_hash or "", sess.raw_content)
+        parsers = store.get_palo_alto_parsers_for_session(sess)
         xlsx_bytes = export_paloalto_excel(parsers)
     else:
-        fg = store.get_fortigate_parser(sess.content_hash or "", sess.raw_content)
+        fg = store.get_fortigate_parser_for_session(sess)
         xlsx_bytes = export_fortigate_excel(fg)
+    gc.collect()
 
     stem = PurePath(sess.filename or "firewall_config").stem
     safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("_") or "firewall_config"

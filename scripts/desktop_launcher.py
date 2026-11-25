@@ -179,6 +179,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.serve:
         return _run_fastapi_server(args.port)
 
+    os.environ.setdefault("FW_DESKTOP_MODE", "1")
     port = _pick_port(args.port)
     url = f"http://127.0.0.1:{port}/"
 
@@ -223,6 +224,12 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         _close_splash()
         _stop_inprocess_server(server_holder, server_thread)
+        try:
+            from backend.session_store import store
+
+            store.cleanup_all()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

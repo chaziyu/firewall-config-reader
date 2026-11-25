@@ -30,7 +30,7 @@
       <button type="button" class="fw-btn fw-btn-block" id="fw-reset-config-btn">
         ↑ Load new config
       </button>
-      <div class="fw-sidebar-version">v2.4.3</div>
+      <div class="fw-sidebar-version">v2.4.4</div>
     </div>
   </aside>
 
@@ -44,6 +44,14 @@
       </div>
       <span class="fw-workspace-file">{{ filename }}</span>
       <div class="fw-workspace-right">
+        <button
+          type="button"
+          class="fw-btn fw-btn-sm fw-qs-trigger"
+          id="fw-quicksearch-btn"
+          title="Global Quick Search (Ctrl+K)"
+        >
+          🔎 Search <kbd class="fw-kbd">Ctrl+K</kbd>
+        </button>
         <button
           type="button"
           class="fw-btn fw-btn-sm"
@@ -99,6 +107,7 @@
         id="fw-chat-key-input"
         class="fw-input"
         placeholder="Paste GEMINI_API_KEY (AIza...)"
+        maxlength="256"
         autocomplete="off"
       />
       <button type="button" id="fw-chat-key-save" class="fw-btn fw-btn-primary fw-btn-sm">Save</button>
@@ -116,11 +125,35 @@
       id="fw-chat-input"
       class="fw-input"
       placeholder="Ask about this config..."
+      maxlength="2000"
       autocomplete="off"
     />
     <button type="submit" id="fw-chat-send" class="fw-btn fw-btn-primary">Send</button>
   </form>
 </section>
+
+<!-- Global Ctrl+K Quick Search Modal -->
+<div id="fw-qs-modal" class="fw-qs-backdrop" style="display:none" role="dialog" aria-modal="true" aria-label="Global Quick Search">
+  <div class="fw-qs-dialog">
+    <div class="fw-qs-header">
+      <div class="fw-qs-title">🔎 Global Quick Search <span class="fw-caption">(IP, CIDR, or Object Name)</span></div>
+      <button type="button" class="fw-btn fw-btn-sm" id="fw-qs-close" title="Close (Esc)">✕</button>
+    </div>
+    <form id="fw-qs-form" class="fw-qs-form">
+      <input
+        type="text"
+        id="fw-qs-input"
+        class="fw-input"
+        placeholder="Search any IP, CIDR subnet, address object, VIP, or interface (e.g. 10.10.1.5, 10.10.1.0/24, LAN_NET)..."
+        autocomplete="off"
+      />
+      <button type="submit" id="fw-qs-submit" class="fw-btn fw-btn-primary">Search</button>
+    </form>
+    <div id="fw-qs-results" class="fw-qs-results">
+      <div class="fw-caption">Tip: Press <kbd class="fw-kbd">Ctrl+K</kbd> anywhere to search references across policies, NAT, routes, VPNs, and interfaces.</div>
+    </div>
+  </div>
+</div>
 
 <script>
   document.body.dataset.vendor = {{ vendor | tojson }};
@@ -129,6 +162,6 @@
 {% endblock %}
 {% block extra_js %}
 <script src="/static/js/table.js"></script>
-<script src="/static/js/workspace.js?v=6"></script>
-<script src="/static/js/chat.js"></script>
+<script src="/static/js/workspace.js?v=9"></script>
+<script src="/static/js/chat.js?v=2"></script>
 {% endblock %}

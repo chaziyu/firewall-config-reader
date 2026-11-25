@@ -5,20 +5,36 @@ In-memory cookie-backed session store, SHA-256 parser cache, and TSF extraction 
 
 from __future__ import annotations
 
+import gc
 import hashlib
 import os
 import secrets
+import sys
 import threading
 import time
 import xml.etree.ElementTree as ET
 import zlib
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import Request, Response
 
 SESSION_COOKIE = "fw_session_id"
 SESSION_TTL_SECONDS = int(os.environ.get("FW_SESSION_TTL_SECONDS", str(30 * 60)))  # 30 minutes
+
+
+def _is_desktop_mode() -> bool:
+    return bool(getattr(sys, "frozen", False) or os.environ.get("FW_DESKTOP_MODE") == "1")
+
+
+def _max_sessions() -> int:
+    return 4 if _is_desktop_mode() else MAX_SESSIONS
+
+
+def _parser_cache_max() -> int:
+    return 2 if _is_desktop_mode() else PARSER_CACHE_MAX
+
+
 MAX_SESSIONS = 24
 PARSER_CACHE_MAX = 16
 
@@ -69,6 +85,7 @@ class SessionData:
     config_summary: str | None = None
     vendor_mismatch: str | None = None
     gemini_api_key: str | None = None
+    chat_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     @property
     def raw_content(self) -> bytes | None:
@@ -107,6 +124,7 @@ class SessionData:
         self.gemini_api_key = None
 
     def reset_tsf(self) -> None:
+        had_tsf = bool(self.tsf_session_id)
         if self.tsf_session_id:
             try:
                 from tsf.extractor import cleanup_session
@@ -121,6 +139,8 @@ class SessionData:
         if self.vendor == "TSF":
             self.vendor = None
             self.filename = None
+        if had_tsf:
+            gc.collect()
 
 
 @dataclass
@@ -154,7 +174,7 @@ class SessionStore:
                 sess.last_accessed = time.time()
                 return sess
 
-            if len(self._sessions) >= MAX_SESSIONS:
+            if len(self._sessions) >= _max_sessions():
                 oldest_sid = min(self._sessions, key=lambda k: self._sessions[k].last_accessed)
                 evicted = self._sessions.pop(oldest_sid, None)
                 if evicted is not None:
@@ -210,7 +230,11 @@ class SessionStore:
             self._tsf_jobs.pop(jid, None)
 
     # ── Parser cache (replaces @st.cache_resource) ────────────────────────
-    def get_palo_alto_parsers(self, content_hash: str, content: bytes) -> dict[str, Any]:
+    def get_palo_alto_parsers(
+        self,
+        content_hash: str,
+        content: bytes | Callable[[], bytes | None],
+    ) -> dict[str, Any]:
         cache_key = f"pa:{content_hash}"
         with self._lock:
             cached = self._parser_cache.get(cache_key)
@@ -226,7 +250,12 @@ class SessionStore:
             PaloPoliciesParser,
         )
 
-        root = ET.fromstring(content.lstrip(b"\xef\xbb\xbf"))
+        raw = content() if callable(content) else content
+        raw_bytes = raw or b""
+        root = ET.fromstring(raw_bytes.lstrip(b"\xef\xbb\xbf"))
+        from backend.upload_service import validate_palo_alto_root
+
+        validate_palo_alto_root(root)
         parsers = {
             "Dashboard": PaloDashboardParser(root),
             "Policies": PaloPoliciesParser(root),
@@ -237,7 +266,15 @@ class SessionStore:
         self._put_cache(cache_key, parsers)
         return parsers
 
-    def get_fortigate_parser(self, content_hash: str, content: bytes) -> Any:
+    def get_palo_alto_parsers_for_session(self, sess: SessionData) -> dict[str, Any]:
+        """Return cached Palo Alto parsers, decompressing session bytes only on cache miss."""
+        return self.get_palo_alto_parsers(sess.content_hash or "", lambda: sess.raw_content or b"")
+
+    def get_fortigate_parser(
+        self,
+        content_hash: str,
+        content: bytes | Callable[[], bytes | None],
+    ) -> Any:
         cache_key = f"fg:{content_hash}"
         with self._lock:
             cached = self._parser_cache.get(cache_key)
@@ -247,30 +284,45 @@ class SessionStore:
 
         from parsers.fortigate import FortiGateParser
 
-        text = content.decode("utf-8", errors="replace")
+        raw = content() if callable(content) else content
+        text = (raw or b"").decode("utf-8", errors="replace")
         parser = FortiGateParser(text)
         self._put_cache(cache_key, parser)
         return parser
 
+    def get_fortigate_parser_for_session(self, sess: SessionData) -> Any:
+        """Return cached FortiGate parser, decompressing session bytes only on cache miss."""
+        return self.get_fortigate_parser(sess.content_hash or "", lambda: sess.raw_content or b"")
+
     def _put_cache(self, key: str, value: Any) -> None:
+        evicted = False
+        limit = _parser_cache_max()
         with self._lock:
-            if len(self._parser_cache) >= PARSER_CACHE_MAX:
+            while len(self._parser_cache) >= limit:
                 oldest_key = min(self._parser_cache, key=lambda k: self._parser_cache[k][0])
                 self._parser_cache.pop(oldest_key, None)
+                evicted = True
             self._parser_cache[key] = (time.time(), value)
+        if evicted:
+            gc.collect()
 
     def evict_parser_cache_if_unreferenced(self, content_hash: str, exclude_sid: str | None = None) -> None:
         """Evict cached parser objects for content_hash if no other active session uses it."""
         if not content_hash:
             return
+        evicted = False
         with self._lock:
             still_used = any(
                 s.content_hash == content_hash and s.session_id != exclude_sid
                 for s in self._sessions.values()
             )
             if not still_used:
-                self._parser_cache.pop(f"pa:{content_hash}", None)
-                self._parser_cache.pop(f"fg:{content_hash}", None)
+                if self._parser_cache.pop(f"pa:{content_hash}", None) is not None:
+                    evicted = True
+                if self._parser_cache.pop(f"fg:{content_hash}", None) is not None:
+                    evicted = True
+        if evicted:
+            gc.collect()
 
     # ── TSF jobs ──────────────────────────────────────────────────────────
     def create_tsf_job(self, session_id: str, filename: str) -> TsfJob:
@@ -291,6 +343,7 @@ class SessionStore:
             self._sessions.clear()
             self._parser_cache.clear()
             self._tsf_jobs.clear()
+        gc.collect()
 
 
 def sha256_bytes(data: bytes) -> str:

@@ -64,12 +64,96 @@ def _fg_interface_aliases(fg: Any) -> dict[str, list[str]]:
     return aliases
 
 
+def _build_return_path_step(
+    vendor: str,
+    s_ip: str,
+    post_dst_ip: str,
+    src_iface: str,
+    dst_iface: str,
+    ing_winner: dict[str, Any] | None,
+    eg_winner: dict[str, Any] | None,
+    *,
+    src_zone: str | None = None,
+    dst_zone: str | None = None,
+    active_policy_routes: int = 0,
+    step_num: str = "6",
+) -> tuple[str, dict[str, Any], str | None]:
+    """Evaluate return-path routing symmetry (dst -> src) and RPF consistency."""
+    if src_iface == "-" or ing_winner is None:
+        summary = "No Return Route (RPF / Drop Risk)"
+        warn = (
+            f"Return path check ({post_dst_ip} → {s_ip}): no connected or static route back to source {s_ip}; "
+            "reply traffic will be blackholed or dropped by Strict RPF."
+        )
+        step = {
+            "Step": step_num,
+            "Stage": "Return Path & Symmetry Check",
+            "Outcome": summary,
+            "Details": f"Reverse LPM lookup for {s_ip} found no active route. Reply packets from {post_dst_ip} cannot return.",
+            "_tone": "danger",
+        }
+        return summary, step, warn
+
+    ing_vr = str(ing_winner.get("Virtual Router") or "").strip()
+    eg_vr = str(eg_winner.get("Virtual Router") or "").strip() if eg_winner else ""
+    if vendor == "Palo Alto" and ing_vr and eg_vr and ing_vr != eg_vr:
+        summary = f"Cross-VR Asymmetry ({eg_vr} ≠ {ing_vr})"
+        warn = (
+            f"Return path check ({post_dst_ip} → {s_ip}): forward egress is in VR '{eg_vr}' via {dst_iface}, "
+            f"while reverse route to {s_ip} is in VR '{ing_vr}' via {src_iface}."
+        )
+        step = {
+            "Step": step_num,
+            "Stage": "Return Path & Symmetry Check",
+            "Outcome": summary,
+            "Details": f"Return prefix {ing_winner.get('Destination', '-')} resolves in VR '{ing_vr}' ({src_iface}), different from egress VR '{eg_vr}'.",
+            "_tone": "warn",
+        }
+        return summary, step, warn
+
+    if src_iface == dst_iface:
+        summary = f"Asymmetric / Hairpin ({dst_iface})"
+        warn = (
+            f"Return path check ({post_dst_ip} → {s_ip}): forward egress and reverse route both use '{dst_iface}'. "
+            "Verify hosts do not bypass the firewall on the return leg (hairpin / asymmetric routing)."
+        )
+        step = {
+            "Step": step_num,
+            "Stage": "Return Path & Symmetry Check",
+            "Outcome": summary,
+            "Details": f"Return lookup for {s_ip} resolves back out {src_iface} ({ing_winner.get('Destination', '-')}).",
+            "_tone": "warn",
+        }
+        return summary, step, warn
+
+    ret_gw = ing_winner.get("Gateway") or ing_winner.get("Next Hop") or "Directly Connected"
+    if dst_zone and src_zone:
+        flow_label = f"{dst_iface} ({dst_zone}) → {src_iface} ({src_zone})"
+    else:
+        flow_label = f"{dst_iface} → {src_iface}"
+    summary = f"Symmetric ({flow_label})"
+    extra = f" Note: {active_policy_routes} active policy route(s) may override static return LPM." if active_policy_routes > 0 else ""
+    step = {
+        "Step": step_num,
+        "Stage": "Return Path & Symmetry Check",
+        "Outcome": summary,
+        "Details": (
+            f"Reverse LPM for {s_ip} matches {ing_winner.get('Destination', '-')} via {src_iface} "
+            f"(Next Hop: {ret_gw}, {ing_winner.get('Type', 'Route')}).{extra}"
+        ),
+        "_tone": "success",
+    }
+    return summary, step, None
+
+
 def trace_fortigate_packet(
     fg: Any,
     src_ip: str,
     dst_ip: str,
     dst_port: str = "443",
     protocol: str = "tcp",
+    *,
+    check_return: bool = True,
 ) -> dict[str, Any]:
     s_ip, err = _validate_ipv4(src_ip, "Source")
     if err or s_ip is None:
@@ -362,7 +446,24 @@ def trace_fortigate_packet(
             }
         )
 
-    return {
+    ret_summary: str | None = None
+    if check_return:
+        ret_summary, ret_step, ret_warn = _build_return_path_step(
+            "FortiGate",
+            s_ip,
+            post_dst_ip,
+            src_iface,
+            dst_iface,
+            ing_winner,
+            eg_winner,
+            active_policy_routes=active_pr,
+            step_num="6",
+        )
+        steps.append(ret_step)
+        if ret_warn and not (src_iface == dst_iface and any("hairpin" in w for w in warnings)):
+            warnings.append(ret_warn)
+
+    res: dict[str, Any] = {
         "valid": True,
         "vendor": "FortiGate",
         "verdict": "ALLOW" if is_allow else "DENY",
@@ -375,6 +476,9 @@ def trace_fortigate_packet(
         "steps": steps,
         "warnings": warnings,
     }
+    if ret_summary is not None:
+        res["return_path"] = ret_summary
+    return res
 
 
 def trace_paloalto_packet(
@@ -384,6 +488,8 @@ def trace_paloalto_packet(
     dst_port: str = "443",
     protocol: str = "tcp",
     virtual_router: str = "all",
+    *,
+    check_return: bool = True,
 ) -> dict[str, Any]:
     s_ip, err = _validate_ipv4(src_ip, "Source")
     if err or s_ip is None:
@@ -639,7 +745,25 @@ def trace_paloalto_packet(
                 }
             )
 
-    return {
+    ret_summary: str | None = None
+    if check_return and verdict != "L2 DIRECT":
+        ret_summary, ret_step, ret_warn = _build_return_path_step(
+            "Palo Alto",
+            s_ip,
+            d_ip,
+            src_iface,
+            dst_iface,
+            ing_w,
+            eg_w,
+            src_zone=src_zone,
+            dst_zone=dst_zone,
+            step_num="5",
+        )
+        steps.append(ret_step)
+        if ret_warn:
+            warnings.append(ret_warn)
+
+    res: dict[str, Any] = {
         "valid": True,
         "vendor": "Palo Alto",
         "verdict": verdict,
@@ -652,6 +776,9 @@ def trace_paloalto_packet(
         "steps": steps,
         "warnings": warnings,
     }
+    if ret_summary is not None:
+        res["return_path"] = ret_summary
+    return res
 
 
 def build_packet_trace_blocks(trace: dict[str, Any]) -> dict[str, Any]:
@@ -667,6 +794,15 @@ def build_packet_trace_blocks(trace: dict[str, Any]) -> dict[str, Any]:
         if verdict == "ALLOW"
         else ("info" if verdict in ("L2 DIRECT", "LOCAL-IN") else "deny")
     )
+    kv_items = [
+        {"label": "Ingress", "value": trace["ingress"]},
+        {"label": "Egress", "value": trace["egress"]},
+        {"label": "Policy Decision", "value": trace["policy"]},
+        {"label": "NAT", "value": trace["nat"]},
+    ]
+    if trace.get("return_path"):
+        kv_items.append({"label": "Return Path", "value": trace["return_path"]})
+
     blocks: list[dict[str, Any]] = [
         {
             "type": "card",
@@ -676,12 +812,7 @@ def build_packet_trace_blocks(trace: dict[str, Any]) -> dict[str, Any]:
         },
         {
             "type": "kv_grid",
-            "items": [
-                {"label": "Ingress", "value": trace["ingress"]},
-                {"label": "Egress", "value": trace["egress"]},
-                {"label": "Policy Decision", "value": trace["policy"]},
-                {"label": "NAT", "value": trace["nat"]},
-            ],
+            "items": kv_items,
         },
     ]
 

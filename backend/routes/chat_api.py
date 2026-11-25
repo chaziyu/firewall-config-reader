@@ -8,10 +8,12 @@ Server environment keys (GEMINI_API_KEY / .env) are only available to direct loc
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.auth import is_authenticated
 from backend.chat_service import (
+    MAX_HISTORY_MESSAGES,
+    MAX_QUESTION_CHARS,
     ask_gemini,
     build_config_summary,
     detect_vendor_from_content,
@@ -23,11 +25,11 @@ router = APIRouter(prefix="/api/chat")
 
 
 class ChatQuestion(BaseModel):
-    question: str
+    question: str = Field(..., max_length=MAX_QUESTION_CHARS)
 
 
 class ApiKeyPayload(BaseModel):
-    api_key: str
+    api_key: str = Field(..., max_length=256)
 
 
 def _mismatch_message(sess) -> str | None:
@@ -87,34 +89,45 @@ def chat_ask(body: ChatQuestion, request: Request):
     if not q:
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
-    raw_bytes = sess.raw_content
-    raw_text = raw_bytes.decode("utf-8", errors="replace")
-    if sess.config_summary is None:
-        sess.config_summary = build_config_summary(
-            raw_text,
-            sess.vendor,
-            content_hash=sess.content_hash,
-            raw_bytes=raw_bytes,
+    if not sess.chat_lock.acquire(blocking=False):
+        raise HTTPException(
+            status_code=429,
+            detail="A chat request is already in progress. Please wait for it to finish.",
         )
-        detected = detect_vendor_from_content(raw_text)
-        if detected and detected != sess.vendor:
-            sess.vendor_mismatch = detected
 
     allow_env = is_loopback_request(request)
-    ok, reply = ask_gemini(
-        question=q,
-        config_summary=sess.config_summary,
-        vendor=sess.vendor,
-        filename=sess.filename or "config",
-        chat_history=sess.chat_history,
-        vendor_mismatch=sess.vendor_mismatch,
-        api_key_override=sess.gemini_api_key,
-        allow_env_fallback=allow_env,
-    )
+    try:
+        raw_bytes = sess.raw_content
+        raw_text = raw_bytes.decode("utf-8", errors="replace")
+        if sess.config_summary is None:
+            sess.config_summary = build_config_summary(
+                raw_text,
+                sess.vendor,
+                content_hash=sess.content_hash,
+                raw_bytes=raw_bytes,
+            )
+            detected = detect_vendor_from_content(raw_text)
+            if detected and detected != sess.vendor:
+                sess.vendor_mismatch = detected
 
-    if ok:
-        sess.chat_history.append({"role": "user", "content": q})
-        sess.chat_history.append({"role": "assistant", "content": reply})
+        ok, reply = ask_gemini(
+            question=q,
+            config_summary=sess.config_summary,
+            vendor=sess.vendor,
+            filename=sess.filename or "config",
+            chat_history=sess.chat_history,
+            vendor_mismatch=sess.vendor_mismatch,
+            api_key_override=sess.gemini_api_key,
+            allow_env_fallback=allow_env,
+        )
+
+        if ok:
+            sess.chat_history.append({"role": "user", "content": q})
+            sess.chat_history.append({"role": "assistant", "content": reply})
+            if len(sess.chat_history) > MAX_HISTORY_MESSAGES:
+                sess.chat_history = sess.chat_history[-MAX_HISTORY_MESSAGES:]
+    finally:
+        sess.chat_lock.release()
 
     return {
         "ok": ok,
@@ -128,6 +141,8 @@ def chat_ask(body: ChatQuestion, request: Request):
 @router.delete("")
 async def chat_clear(request: Request):
     sess = store.get_existing(request)
+    if not is_authenticated(sess):
+        raise HTTPException(status_code=401, detail="Authentication required.")
     if sess is not None:
         sess.chat_history = []
     return {"ok": True}

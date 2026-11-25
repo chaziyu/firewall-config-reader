@@ -16,6 +16,7 @@ from backend.upload_service import (
     sanitize_config_bytes,
     validate_content,
     validate_filename,
+    validate_structure,
 )
 from tsf.extractor import cleanup_old_sessions, validate_and_extract
 from tsf.indexer import build_file_index, start_content_indexing
@@ -73,6 +74,7 @@ async def upload_file(request: Request, response: Response, file: UploadFile = F
         ext, is_tsf = validate_filename(filename)
         content = await file.read()
         validate_content(content, is_tsf)
+        validate_structure(content, ext)
     except UploadValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -93,6 +95,8 @@ async def upload_file(request: Request, response: Response, file: UploadFile = F
             store.get_palo_alto_parsers(content_hash, content)
         else:
             store.get_fortigate_parser(content_hash, content)
+    except UploadValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Failed to parse {vendor} config: {exc}") from exc
 

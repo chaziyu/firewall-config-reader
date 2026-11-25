@@ -399,142 +399,6 @@ class PaloPoliciesParser(PaloAltoParser):
             )
         return rows
 
-    def test_policy_match(
-        self,
-        policy_type: str,
-        src_zone: str,
-        dst_zone: str,
-        src_intf: str,
-        dst_intf: str,
-        src_ip: str,
-        dst_ip: str,
-        dst_port: str,
-        src_user: str = "any",
-        protocol: str = "tcp",
-    ) -> dict:
-        """
-        Evaluates rules from TOP to BOTTOM.
-        Enforces AND condition across all 9 criteria.
-        """
-        rules_el = None
-        if self.rb is not None:
-            type_map = {
-                "security": "security/rules",
-                "nat": "nat/rules",
-                "qos": "qos/rules",
-                "pbf": "pbf/rules",
-                "decryption": "decryption/rules",
-                "auth": "authentication/rules",
-                "dos": "dos-protection/rules",
-            }
-            path = type_map.get(policy_type)
-            if path:
-                rules_el = self.rb.find(path)
-
-        if rules_el is None:
-            return {
-                "matched": False,
-                "rule": None,
-                "action": "deny",
-                "reason": "No rulebase found.",
-            }
-
-        addr_map, group_map = self._build_addr_map(), self._build_group_map()
-        svc_map, svc_grp_map = self._build_svc_map(), self._build_svc_group_map()
-
-        for idx, entry in enumerate(rules_el.findall("entry")):
-            if (entry.findtext("disabled") or "no").lower() == "yes":
-                continue
-
-            # --- START AND CONDITION EVALUATION ---
-
-            # 1 & 2. Zones
-            from_z = [m.text for m in entry.findall("from/member") if m.text]
-            to_z = [m.text for m in entry.findall("to/member") if m.text]
-            sz_ok = (
-                not src_zone
-                or src_zone.lower() == "any"
-                or "any" in [z.lower() for z in from_z]
-                or src_zone in from_z
-            )
-            dz_ok = (
-                not dst_zone
-                or dst_zone.lower() == "any"
-                or "any" in [z.lower() for z in to_z]
-                or dst_zone in to_z
-            )
-            if not (sz_ok and dz_ok):
-                continue
-
-            # 3 & 4. Interfaces (Specific to PBF or specific rule types)
-            # Note: Security rules often use zones, but we check interface members if present
-            from_i = [m.text for m in entry.findall("from/interface/member") if m.text]
-            to_i = [m.text for m in entry.findall("to/interface/member") if m.text]
-            si_ok = (
-                not src_intf
-                or src_intf.lower() == "any"
-                or not from_i
-                or src_intf in from_i
-            )
-            di_ok = (
-                not dst_intf
-                or dst_intf.lower() == "any"
-                or not to_i
-                or dst_intf in to_i
-            )
-            if not (si_ok and di_ok):
-                continue
-
-            # 5 & 6. IPs
-            src_m = [m.text for m in entry.findall("source/member") if m.text]
-            dst_m = [m.text for m in entry.findall("destination/member") if m.text]
-            if not self._ip_matches_members(src_ip, src_m, addr_map, group_map):
-                continue
-            if not self._ip_matches_members(dst_ip, dst_m, addr_map, group_map):
-                continue
-
-            # 7. Source User
-            user_m = [m.text for m in entry.findall("source-user/member") if m.text]
-            user_ok = (
-                src_user.lower() == "any"
-                or "any" in [u.lower() for u in user_m]
-                or not user_m
-                or src_user in user_m
-            )
-            if not user_ok:
-                continue
-
-            # 8 & 9. Port and Protocol
-            svc_m = [m.text for m in entry.findall("service/member") if m.text] or [
-                "any"
-            ]
-            if not self._svc_matches_members(
-                dst_port, protocol, svc_m, svc_map, svc_grp_map
-            ):
-                continue
-
-            # --- ALL CRITERIA MET (MATCH FOUND) ---
-            action = entry.findtext("action") or "allow"
-            return {
-                "matched": True,
-                "rule": {
-                    "Name": entry.get("name"),
-                    "Order": idx + 1,
-                    "Action": action.upper(),
-                    "Source": f"{src_zone} / {src_ip}",
-                    "Destination": f"{dst_zone} / {dst_ip}",
-                },
-                "action": action,
-                "reason": f"Hit Policy: {entry.get('name')} (Index {idx+1})",
-            }
-
-        return {
-            "matched": False,
-            "rule": None,
-            "action": "deny",
-            "reason": "Implicit Default Deny",
-        }
-
     # ── IP / Port helpers ─────────────────────────────────────
     def _build_addr_map(self):
         """Return dict {name: [(type, value), ...]} for all address objects."""
@@ -754,6 +618,7 @@ class PaloPoliciesParser(PaloAltoParser):
         svc_map, svc_grp_map = self._build_svc_map(), self._build_svc_group_map()
 
         # Rules are ordered in XML from highest priority (top) to lowest (bottom)
+        matches: list[dict] = []
         for idx, entry in enumerate(rules_el.findall("entry")):
             if (entry.findtext("disabled") or "no").lower() == "yes":
                 continue
@@ -827,23 +692,36 @@ class PaloPoliciesParser(PaloAltoParser):
                 continue
 
             # --- MATCH SUCCESS ---
-            # If we reach here, all 9 criteria are TRUE for this specific rule.
             action = entry.findtext("action") or "allow"
-            return {
-                "matched": True,
-                "rule": {
-                    "Rule Name": entry.get("name"),
+            matches.append(
+                {
+                    "Rule Name": entry.get("name") or "-",
                     "Priority (Index)": idx + 1,
                     "Action": action.upper(),
-                },
-                "action": action,
-                "reason": f"Hit Policy: {entry.get('name')} at Index {idx+1}",
+                    "Source Zone": ", ".join(from_z) or "any",
+                    "Dest Zone": ", ".join(to_z) or "any",
+                    "Source": ", ".join(src_m) or "any",
+                    "Destination": ", ".join(dst_m) or "any",
+                    "Service": ", ".join(svc_m) or "any",
+                }
+            )
+
+        if matches:
+            first_rule = matches[0]
+            shadowed = matches[1:]
+            return {
+                "matched": True,
+                "rule": first_rule,
+                "shadowed": shadowed,
+                "action": first_rule["Action"].lower(),
+                "reason": f"Hit Policy: {first_rule['Rule Name']} at Index {first_rule['Priority (Index)']}",
             }
 
         # If the loop finishes without a match, return the default behavior
         return {
             "matched": False,
             "rule": None,
+            "shadowed": [],
             "action": "deny",
             "reason": "No policy matched all criteria. Traffic hits Implicit Default Deny.",
         }

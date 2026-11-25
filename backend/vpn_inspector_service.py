@@ -38,6 +38,23 @@ def _clean_fg_iface_name(name: str) -> str:
     return str(name or "").replace("\u00a0", "").replace("\u2517 ", "").strip()
 
 
+def _format_nat_summary(items: list[str], noun_singular: str, noun_plural: str, max_show: int = 2) -> str:
+    """Format a concise NAT finding tag with bounded policy/rule enumeration."""
+    if len(items) == 1:
+        return f"NAT on {noun_singular} {items[0]}"
+    if len(items) <= max_show:
+        return f"NAT on {len(items)} {noun_plural} ({', '.join(items)})"
+    return f"NAT on {len(items)} {noun_plural} ({', '.join(items[:max_show])}, +{len(items) - max_show})"
+
+
+def format_vpn_findings_summary(ins: dict[str, Any]) -> str:
+    """Build a concise, scannable single-line Findings summary for tables and reports."""
+    s_errs = ins.get("summary_errors", ins.get("errors", []))
+    s_warns = ins.get("summary_warnings", ins.get("warnings", []))
+    combined = list(s_errs) + list(s_warns)
+    return " | ".join(combined) if combined else "OK"
+
+
 def inspect_fortigate_vpns(fg: Any) -> list[dict[str, Any]]:
     phase1_list = fg.parse_ipsec_phase1() or []
     if not phase1_list:
@@ -74,18 +91,27 @@ def inspect_fortigate_vpns(fg: Any) -> list[dict[str, Any]]:
         tun_status = str(iface_row.get("Status", p1.get("status", "Enable")))
 
         p2_matches = [p2 for p2 in phase2_list if p2.get("phase1name") == tname]
-        p2_rows = [
-            {
-                "Selector": str(p2.get("name", "-")),
-                "Local": str(p2.get("src_name") if p2.get("src_addr_type") == "name" else p2.get("src_subnet", "-")),
-                "Remote": str(p2.get("dst_name") if p2.get("dst_addr_type") == "name" else p2.get("dst_subnet", "-")),
-                "Proposal": str(p2.get("proposal", "-")),
-                "DH Group": str(p2.get("dhgrp", "-")),
-                "PFS": str(p2.get("pfs", "-")),
-                "Auto-Neg": str(p2.get("auto_negotiate", "-")),
-            }
-            for p2 in p2_matches
-        ]
+        p2_rows: list[dict[str, Any]] = []
+        weak_p2_selectors: list[str] = []
+        weak_p2_tokens: list[str] = []
+        for p2 in p2_matches:
+            weak_p2 = _find_weak_crypto(str(p2.get("proposal", "")), str(p2.get("dhgrp", "")))
+            sel_name = str(p2.get("name", "-"))
+            if weak_p2:
+                weak_p2_selectors.append(sel_name)
+                weak_p2_tokens.extend(weak_p2)
+            p2_rows.append(
+                {
+                    "Selector": sel_name,
+                    "Local": str(p2.get("src_name") if p2.get("src_addr_type") == "name" else p2.get("src_subnet", "-")),
+                    "Remote": str(p2.get("dst_name") if p2.get("dst_addr_type") == "name" else p2.get("dst_subnet", "-")),
+                    "Proposal": str(p2.get("proposal", "-")),
+                    "DH Group": str(p2.get("dhgrp", "-")),
+                    "PFS": str(p2.get("pfs", "-")),
+                    "Auto-Neg": str(p2.get("auto_negotiate", "-")),
+                    "_weak": bool(weak_p2),
+                }
+            )
 
         match_targets = {tname}
         if zone != "-":
@@ -133,29 +159,49 @@ def inspect_fortigate_vpns(fg: Any) -> list[dict[str, Any]]:
 
         errors: list[str] = []
         warnings: list[str] = []
+        summary_errors: list[str] = []
+        summary_warnings: list[str] = []
 
         if str(p1.get("status", "Enable")).lower() == "disable":
             errors.append("Phase 1 tunnel is administratively disabled.")
+            summary_errors.append("P1 disabled")
         if not p2_rows:
             errors.append("No Phase 2 selectors configured for this tunnel.")
+            summary_errors.append("No P2 selectors")
         if not active_routes and not (is_dialup and str(p1.get("add_route", "enable")).lower() == "enable"):
             errors.append(f"No active static route points to tunnel interface '{tname}'.")
+            summary_errors.append("No static route")
         if not enabled_accept_pols:
             target_desc = f"'{tname}'" if zone == "-" else f"'{tname}' or zone '{zone}'"
             errors.append(f"No enabled ACCEPT firewall policy references {target_desc}.")
+            summary_errors.append("No allow policy")
 
         if nat_enabled_pols:
-            ids = ", ".join(f"#{p['ID']}" for p in nat_enabled_pols)
-            warnings.append(f"NAT is enabled on site-to-site allow policy {ids} (verify if SNAT is intentional).")
+            pol_ids = [f"#{p['ID']}" for p in nat_enabled_pols]
+            warnings.append(f"NAT is enabled on site-to-site allow policy {', '.join(pol_ids)} (verify if SNAT is intentional).")
+            summary_warnings.append(_format_nat_summary(pol_ids, "policy", "policies"))
         if str(p1.get("ike_version", "1")) == "1":
             warnings.append("Uses legacy IKEv1; consider upgrading to IKEv2 if peer supports it.")
+            summary_warnings.append("IKEv1")
         weak_p1 = _find_weak_crypto(str(p1.get("proposal", "")), str(p1.get("dhgrp", "")))
         if weak_p1:
-            warnings.append(f"Weak Phase 1 crypto/DH detected: {', '.join(weak_p1)}.")
-        for p2 in p2_matches:
-            weak_p2 = _find_weak_crypto(str(p2.get("proposal", "")), str(p2.get("dhgrp", "")))
-            if weak_p2:
-                warnings.append(f"Weak Phase 2 crypto/DH in '{p2.get('name', '-')}': {', '.join(weak_p2)}.")
+            weak_p1_str = ", ".join(weak_p1)
+            warnings.append(f"Weak Phase 1 crypto/DH detected: {weak_p1_str}.")
+            summary_warnings.append(f"Weak P1 ({weak_p1_str})")
+        if weak_p2_selectors:
+            sel_count = len(weak_p2_selectors)
+            total_p2 = len(p2_matches)
+            tokens_str = ", ".join(dict.fromkeys(weak_p2_tokens))
+            if sel_count == 1:
+                warnings.append(f"Weak Phase 2 crypto/DH in '{weak_p2_selectors[0]}': {tokens_str}.")
+                summary_warnings.append(f"Weak P2 (1 selector: {tokens_str})")
+            else:
+                sample = ", ".join(f"'{s}'" for s in weak_p2_selectors[:3])
+                if sel_count > 3:
+                    sample += f" (+{sel_count - 3} more)"
+                warnings.append(f"Weak Phase 2 crypto/DH in {sel_count}/{total_p2} selectors ({sample}): {tokens_str}.")
+                scope = f"{sel_count} selectors" if sel_count == total_p2 else f"{sel_count}/{total_p2} selectors"
+                summary_warnings.append(f"Weak P2 ({scope}: {tokens_str})")
 
         inspections.append(
             {
@@ -185,6 +231,8 @@ def inspect_fortigate_vpns(fg: Any) -> list[dict[str, Any]]:
                 "allow_policy_count": len(enabled_accept_pols),
                 "errors": errors,
                 "warnings": warnings,
+                "summary_errors": summary_errors,
+                "summary_warnings": summary_warnings,
             }
         )
     return inspections
@@ -281,36 +329,49 @@ def inspect_paloalto_vpns(network_parser: Any, policies_parser: Any = None) -> l
 
         errors: list[str] = []
         warnings: list[str] = []
+        summary_errors: list[str] = []
+        summary_warnings: list[str] = []
 
         if tun_intf == "-":
             errors.append("No tunnel interface assigned to IPSec tunnel.")
+            summary_errors.append("No tunnel intf")
         if zone == "-":
             errors.append(f"Tunnel interface '{tun_intf}' is not assigned to a Security Zone.")
+            summary_errors.append("No zone")
         if vr_name == "-":
             warnings.append(f"Tunnel interface '{tun_intf}' is not assigned to a Virtual Router.")
+            summary_warnings.append("No VR")
         if not routes_for_tun:
             errors.append(f"No static route points to tunnel interface '{tun_intf}'.")
+            summary_errors.append("No static route")
         if policies_parser is not None and zone != "-" and not enabled_allow_pols:
             errors.append(f"No enabled 'allow' security policy references zone '{zone}'.")
+            summary_errors.append("No allow policy")
 
         if "ikev1" in ike_ver.lower():
             warnings.append("IKE Gateway uses legacy IKEv1; consider IKEv2 if peer supports it.")
+            summary_warnings.append("IKEv1")
         if nat_hits:
             warnings.append(f"NAT rule(s) {', '.join(nat_hits)} translate traffic in tunnel zone '{zone}' (verify if intentional).")
+            summary_warnings.append(_format_nat_summary(nat_hits, "rule", "rules"))
 
         weak_ike = _find_weak_crypto(
             f"{ike_prof.get('Encryption', '')} {ike_prof.get('Authentication', '')}",
             str(ike_prof.get("DH Group", "")),
         )
         if weak_ike:
-            warnings.append(f"Weak IKE Crypto ({ike_prof_name}): {', '.join(weak_ike)}.")
+            weak_ike_str = ", ".join(weak_ike)
+            warnings.append(f"Weak IKE Crypto ({ike_prof_name}): {weak_ike_str}.")
+            summary_warnings.append(f"Weak IKE ({weak_ike_str})")
 
         weak_ipsec = _find_weak_crypto(
             f"{ipsec_prof.get('Encryption', '')} {ipsec_prof.get('Authentication', '')}",
             str(ipsec_prof.get("DH Group", "")),
         )
         if weak_ipsec:
-            warnings.append(f"Weak IPSec Crypto ({ipsec_prof_name}): {', '.join(weak_ipsec)}.")
+            weak_ipsec_str = ", ".join(weak_ipsec)
+            warnings.append(f"Weak IPSec Crypto ({ipsec_prof_name}): {weak_ipsec_str}.")
+            summary_warnings.append(f"Weak IPSec ({weak_ipsec_str})")
 
         inspections.append(
             {
@@ -335,6 +396,7 @@ def inspect_paloalto_vpns(network_parser: Any, policies_parser: Any = None) -> l
                         "Authentication": str(ipsec_prof.get("Authentication", "-")),
                         "DH Group": str(ipsec_prof.get("DH Group", "-")),
                         "Lifetime": str(ipsec_prof.get("Lifetime", "-")),
+                        "_weak": bool(weak_ipsec),
                     }
                 ]
                 if ipsec_prof
@@ -351,6 +413,8 @@ def inspect_paloalto_vpns(network_parser: Any, policies_parser: Any = None) -> l
                 "allow_policy_count": len(enabled_allow_pols),
                 "errors": errors,
                 "warnings": warnings,
+                "summary_errors": summary_errors,
+                "summary_warnings": summary_warnings,
             }
         )
     return inspections
@@ -375,7 +439,7 @@ def build_vpn_inspector_blocks(inspections: list[dict[str, Any]], vendor: str) -
             status_str = "Healthy"
             row_cls = "row-success"
         overview_classes.append(row_cls)
-        findings_text = "; ".join(errs + warns) if (errs or warns) else "All 4 layers verified (Tunnel, Zone/Intf, Route, Policy)"
+        findings_text = format_vpn_findings_summary(ins)
         overview_rows.append(
             {
                 "Tunnel": ins["name"],
@@ -439,17 +503,20 @@ def build_vpn_inspector_blocks(inspections: list[dict[str, Any]], vendor: str) -
         detail_blocks.append({"type": "section_header", "title": "1. Phase 1 / IKE & Crypto Parameters"})
         detail_blocks.append({"type": "kv_grid", "items": ins["layer1_items"]})
         if ins["phase2_rows"]:
-            p2_cols = list(ins["phase2_rows"][0].keys())
-            detail_blocks.append(
-                {
-                    "type": "table",
-                    "id": f"{vendor}_vpn_insp_p2_{idx}",
-                    "title": "Phase 2 / IPSec Crypto Details",
-                    "columns": p2_cols,
-                    "rows": [{c: str(r.get(c, "")) for c in p2_cols} for r in ins["phase2_rows"]],
-                    "export_filename": f"{vendor}_vpn_{idx}_phase2.csv",
-                }
-            )
+            p2_cols = [k for k in ins["phase2_rows"][0].keys() if not str(k).startswith("_")]
+            has_weak_p2 = any(r.get("_weak") for r in ins["phase2_rows"])
+            p2_block: dict[str, Any] = {
+                "type": "table",
+                "id": f"{vendor}_vpn_insp_p2_{idx}",
+                "title": "Phase 2 / IPSec Crypto Details",
+                "columns": p2_cols,
+                "rows": [{c: str(r.get(c, "")) for c in p2_cols} for r in ins["phase2_rows"]],
+                "export_filename": f"{vendor}_vpn_{idx}_phase2.csv",
+            }
+            if has_weak_p2:
+                p2_block["row_classes"] = ["row-warn" if r.get("_weak") else "" for r in ins["phase2_rows"]]
+                p2_block["legend"] = [{"label": "Weak Phase 2 Crypto / DH Group (amber)", "variant": "warn"}]
+            detail_blocks.append(p2_block)
 
         detail_blocks.append({"type": "section_header", "title": "2. Tunnel Interface & Zone Binding"})
         detail_blocks.append({"type": "kv_grid", "items": ins["layer2_items"]})

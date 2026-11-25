@@ -18,24 +18,28 @@ ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 templates = Jinja2Templates(directory=str(ROOT_DIR / "templates"))
 
 PA_PAGES = [
-    ("Dashboard", "📊"),
-    ("Policies", "🛡"),
+    ("Overview", "📊"),
+    ("Security & Health", "🩺"),
+    ("Policies & NAT", "🛡"),
     ("Objects", "📦"),
-    ("Network", "🌐"),
-    ("Device", "⚙"),
+    ("Interfaces & Network", "🌐"),
+    ("Security Profiles", "🔒"),
+    ("VPN", "🔑"),
+    ("Users & Auth", "👥"),
+    ("System & Logs", "⚙"),
 ]
 
 FG_PAGES = [
-    ("Summary", "📊"),
-    ("Interfaces", "🔌"),
-    ("Network", "🌐"),
-    ("Policy & Objects", "🛡"),
-    ("Security", "🔒"),
+    ("Overview", "📊"),
+    ("Security & Health", "🩺"),
+    ("Policies & NAT", "🛡"),
+    ("Objects", "📦"),
+    ("Interfaces & Network", "🌐"),
+    ("Security Profiles", "🔒"),
     ("VPN", "🔑"),
-    ("User & Auth", "👥"),
+    ("Users & Auth", "👥"),
     ("WiFi & Switch", "📶"),
-    ("System", "⚙"),
-    ("Log & Report", "📋"),
+    ("System & Logs", "⚙"),
 ]
 
 router = APIRouter()

@@ -13,7 +13,7 @@
   function formatInlineMarkdown(escapedLine) {
     return escapedLine
       .replace(/`([^`\n]+)`/g, "<code>$1</code>")
-      .replace(/\*\*([*\n]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
       .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s.,!?:;)]|$)/g, "$1<em>$2</em>");
   }
 
@@ -247,7 +247,13 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ api_key: keyValue }),
         });
-        if (!res.ok) return;
+        if (!res.ok) {
+          if (keyBadge) {
+            keyBadge.textContent = "Save failed";
+            keyBadge.classList.remove("is-configured");
+          }
+          return;
+        }
         const data = await res.json();
         updateKeyStatus(data.key_status);
         if (keyInput) keyInput.value = "";
@@ -256,7 +262,10 @@
           if (keyToggleBtn) keyToggleBtn.classList.remove("active");
         }
       } catch (_err) {
-        // Ignore network failure on key save
+        if (keyBadge) {
+          keyBadge.textContent = "Save failed";
+          keyBadge.classList.remove("is-configured");
+        }
       }
     }
 

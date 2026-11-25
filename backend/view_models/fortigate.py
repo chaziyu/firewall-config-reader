@@ -37,6 +37,13 @@ from backend.ssl_to_ipsec_service import (
     analyze_fortigate_ssl_to_ipsec,
     build_ssl_to_ipsec_blocks,
 )
+from backend.view_models.common import (
+    ADMIN_LEGEND,
+    POLICY_LEGEND,
+    policy_caption,
+    table_block as _table_block,
+    toggle_row as _toggle_row,
+)
 from backend.vpn_inspector_service import build_vpn_inspector_blocks, inspect_fortigate_vpns
 
 _INTERNAL_ADDR_KEYS = {
@@ -49,86 +56,20 @@ _INTERNAL_ADDR_KEYS = {
 }
 
 
-def _table_block(
-    rows: list[dict[str, Any]] | None,
-    table_id: str,
-    title: str = "",
-    empty_text: str = "Not configured.",
-    caption: str = "",
-    export_filename: str | None = None,
-    row_class_fn: Callable[[dict[str, Any]], str] | None = None,
-    filter_col: str | None = None,
-    drop_keys: set[str] | None = None,
-    legend: list[dict[str, str] | str] | None = None,
-) -> dict[str, Any]:
-    if not rows:
-        return {"type": "alert", "variant": "info", "text": empty_text}
-
-    skip = drop_keys or set()
-    cols = [k for k in rows[0].keys() if not str(k).startswith("_") and k not in skip]
-    clean_rows = [{c: ("" if r.get(c) is None else str(r.get(c))) for c in cols} for r in rows]
-    row_classes = [row_class_fn(r) if row_class_fn else "" for r in rows]
-
-    blk: dict[str, Any] = {
-        "type": "table",
-        "id": table_id,
-        "title": title,
-        "columns": cols,
-        "rows": clean_rows,
-        "row_classes": row_classes,
-        "caption": caption,
-        "export_filename": export_filename or f"{table_id}.csv",
-    }
-    if filter_col and filter_col in cols:
-        blk["filter_col"] = filter_col
-    if legend:
-        blk["legend"] = legend
-    return blk
-
-
-def _on(v: Any) -> bool:
-    return str(v or "disable").lower() in ("enable", "on", "all", "enabled", "yes", "1", "true")
-
-
-def _toggle_row(label: str, val: Any) -> dict[str, str]:
-    on = _on(val)
-    return {"label": label, "value": "ON" if on else "OFF", "tone": "allow" if on else "muted"}
-
-
-# ── 1. Summary ───────────────────────────────────────────────────────────────
-def build_summary(parser: Any, *, allow_probe: bool = False) -> dict[str, Any]:
-    hostname = parser.get_hostname()
+# ── 1. Summary & Security/Health ─────────────────────────────────────────────
+def _safe_fg_call(fn, default="Unknown"):
     try:
-        dns = parser.get_dns()
-        dns_primary = dns.get("primary", "Unknown")
-        dns_secondary = dns.get("secondary", "Unknown")
+        return fn()
     except Exception:
-        dns_primary, dns_secondary = "Unknown", "Unknown"
+        return default
 
-    def _safe(fn, default="Unknown"):
-        try:
-            return fn()
-        except Exception:
-            return default
 
-    wan_ip = _safe(parser.get_wan_ip)
-    mgmt_info = _safe(parser.get_management_ip, {"ip": "Not configured", "sub": ""})
-    if not isinstance(mgmt_info, dict):
-        mgmt_info = {"ip": str(mgmt_info), "sub": ""}
-    sys_settings = _safe(parser.parse_system_settings, {}) or {}
-    http_port = str(sys_settings.get("http_port") or "80")
-    https_port = str(sys_settings.get("https_port") or "443")
-    ssh_port = str(sys_settings.get("ssh_port") or "22")
-    serial = _safe(parser.get_serial_number)
-    model = _safe(parser.get_model)
-    firmware = _safe(parser.get_firmware_version)
-    ha = _safe(parser.get_ha_config, {"enabled": False})
+def _eval_fortigate_health(parser: Any, *, allow_probe: bool = False) -> dict[str, Any]:
+    hostname = parser.get_hostname()
+    serial = _safe_fg_call(parser.get_serial_number)
+    model = _safe_fg_call(parser.get_model)
+    firmware = _safe_fg_call(parser.get_firmware_version)
 
-    ha_badge = (
-        {"text": f"HA Enabled · {ha.get('mode', 'Cluster')}", "variant": "allow"}
-        if ha.get("enabled")
-        else {"text": "Standalone", "variant": "muted"}
-    )
     lifecycle = evaluate_fortigate_lifecycle(model, firmware, cache_only=True)
     lifecycle_badge, lifecycle_card = build_fortigate_lifecycle_blocks(lifecycle)
     exposure_findings = find_fortigate_public_mgmt_exposure(parser)
@@ -141,26 +82,80 @@ def build_summary(parser: Any, *, allow_probe: bool = False) -> dict[str, Any]:
     audit_badge, audit_expander = build_audit_overview_blocks(audit_result)
     cert_list = inspect_fortigate_certificates(parser)
     cert_badge, cert_card = build_cert_overview_blocks(cert_list)
+
+    subtitle_parts = [f"Firmware {firmware}", f"S/N {serial}"]
+    if model and model != "Unknown":
+        subtitle_parts.insert(0, str(lifecycle.get("model_display") or model))
+
+    return {
+        "hostname": hostname,
+        "serial": serial,
+        "model": model,
+        "firmware": firmware,
+        "subtitle": " · ".join(subtitle_parts),
+        "lifecycle": lifecycle,
+        "lifecycle_badge": lifecycle_badge,
+        "lifecycle_card": lifecycle_card,
+        "exposure_badge": exposure_badge,
+        "exposure_card": exposure_card,
+        "audit_badge": audit_badge,
+        "audit_expander": audit_expander,
+        "cert_badge": cert_badge,
+        "cert_card": cert_card,
+    }
+
+
+def build_overview(parser: Any, *, allow_probe: bool = False) -> dict[str, Any]:
+    health = _eval_fortigate_health(parser, allow_probe=allow_probe)
+    hostname = health["hostname"]
+    serial = health["serial"]
+    model = health["model"]
+    firmware = health["firmware"]
+    lifecycle = health["lifecycle"]
+
+    try:
+        dns = parser.get_dns()
+        dns_primary = dns.get("primary", "Unknown")
+        dns_secondary = dns.get("secondary", "Unknown")
+    except Exception:
+        dns_primary, dns_secondary = "Unknown", "Unknown"
+
+    wan_ip = _safe_fg_call(parser.get_wan_ip)
+    mgmt_info = _safe_fg_call(parser.get_management_ip, {"ip": "Not configured", "sub": ""})
+    if not isinstance(mgmt_info, dict):
+        mgmt_info = {"ip": str(mgmt_info), "sub": ""}
+    sys_settings = _safe_fg_call(parser.parse_system_settings, {}) or {}
+    http_port = str(sys_settings.get("http_port") or "80")
+    https_port = str(sys_settings.get("https_port") or "443")
+    ssh_port = str(sys_settings.get("ssh_port") or "22")
+    ha = _safe_fg_call(parser.get_ha_config, {"enabled": False})
+
+    ha_badge = (
+        {"text": f"HA Enabled · {ha.get('mode', 'Cluster')}", "variant": "allow"}
+        if ha.get("enabled")
+        else {"text": "Standalone", "variant": "muted"}
+    )
     posture = evaluate_fortigate_posture(parser)
 
     mgmt_item: dict[str, Any] = {"label": "Management IP", "value": mgmt_info.get("ip", "Not configured")}
     if mgmt_info.get("sub"):
         mgmt_item["sub"] = mgmt_info["sub"]
 
-    subtitle_parts = [f"Firmware {firmware}", f"S/N {serial}"]
-    if model and model != "Unknown":
-        subtitle_parts.insert(0, str(lifecycle.get("model_display") or model))
-
-    hero_badges = [ha_badge, lifecycle_badge, exposure_badge, audit_badge]
-    if cert_badge is not None:
-        hero_badges.append(cert_badge)
+    hero_badges = [
+        ha_badge,
+        health["lifecycle_badge"],
+        health["exposure_badge"],
+        health["audit_badge"],
+    ]
+    if health["cert_badge"] is not None:
+        hero_badges.append(health["cert_badge"])
 
     blocks: list[dict[str, Any]] = [
         {
             "type": "hero",
             "eyebrow": "FortiGate Appliance",
             "title": str(hostname),
-            "subtitle": " · ".join(subtitle_parts),
+            "subtitle": health["subtitle"],
             "badges": hero_badges,
         },
         {"type": "section_header", "title": "System Overview"},
@@ -179,17 +174,81 @@ def build_summary(parser: Any, *, allow_probe: bool = False) -> dict[str, Any]:
                 {"label": "Local Hard Disk", "value": posture["disk"], "sub": posture["disk_sub"]},
             ],
         },
-        lifecycle_card,
+        {"type": "section_header", "title": "High Availability"},
     ]
-    if exposure_card is not None:
-        blocks.append(exposure_card)
-    if cert_card is not None:
-        blocks.append(cert_card)
-    blocks.append({"type": "where_used_lookup", "vendor": "fg"})
-    blocks.append({"type": "packet_trace", "vendor": "fg"})
-    blocks.append({"type": "config_diff", "vendor": "fg"})
-    blocks.append(audit_expander)
-    return {"section": "Summary", "blocks": blocks}
+
+    if not ha.get("enabled"):
+        blocks.append(
+            {
+                "type": "card",
+                "title": "Standalone Mode",
+                "subtitle": "High Availability is not enabled in this FortiOS configuration.",
+                "badge": {"text": "Not Enabled", "variant": "muted"},
+            }
+        )
+    else:
+        blocks.append(
+            {
+                "type": "card",
+                "title": f"{ha.get('mode', 'HA')} Cluster",
+                "subtitle": f"Group: {ha.get('group_name', '—')}",
+                "badge": {"text": "HA Enabled", "variant": "allow"},
+            }
+        )
+        blocks.append(
+            {
+                "type": "kv_grid",
+                "items": [
+                    {"label": "Mode", "value": ha.get("mode", "—")},
+                    {"label": "Group Name", "value": ha.get("group_name", "—")},
+                    {"label": "Priority", "value": ha.get("priority", "—")},
+                    {"label": "Session Pickup", "value": ha.get("session_pickup", "disable")},
+                    {"label": "Heartbeat Interfaces", "value": ", ".join(ha.get("heartbeat_interfaces", [])) or "—"},
+                ],
+            }
+        )
+
+    blocks.extend(
+        [
+            {"type": "where_used_lookup", "vendor": "fg"},
+            {"type": "packet_trace", "vendor": "fg"},
+            {"type": "config_diff", "vendor": "fg"},
+        ]
+    )
+    return {"section": "Overview", "blocks": blocks}
+
+
+def build_summary(parser: Any, *, allow_probe: bool = False) -> dict[str, Any]:
+    return build_overview(parser, allow_probe=allow_probe)
+
+
+def build_security_health(parser: Any, *, allow_probe: bool = False) -> dict[str, Any]:
+    """Build the Security & Health overview page for FortiGate."""
+    health = _eval_fortigate_health(parser, allow_probe=allow_probe)
+    hero_badges = [
+        health["lifecycle_badge"],
+        health["exposure_badge"],
+        health["audit_badge"],
+    ]
+    if health["cert_badge"] is not None:
+        hero_badges.append(health["cert_badge"])
+
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "hero",
+            "eyebrow": "Security & Health",
+            "title": str(health["hostname"]),
+            "subtitle": health["subtitle"],
+            "badges": hero_badges,
+        },
+        health["lifecycle_card"],
+    ]
+    if health["exposure_card"] is not None:
+        blocks.append(health["exposure_card"])
+    if health["cert_card"] is not None:
+        blocks.append(health["cert_card"])
+    blocks.append(health["audit_expander"])
+    return {"section": "Security & Health", "blocks": blocks}
 
 
 # ── 2. Interfaces ────────────────────────────────────────────────────────────
@@ -225,6 +284,13 @@ def build_interfaces(parser: Any) -> dict[str, Any]:
     )
     zones = len([r for r in rows if str(r.get("Type", "")).lower() == "zone"])
 
+    optional_cols = ("Secondary IPs", "IPv6", "VRF", "MTU", "Description")
+    empty_optional = {
+        col
+        for col in optional_cols
+        if all(str(r.get(col, "-")) in ("-", "") for r in rows)
+    }
+
     blocks = [
         {
             "type": "legend",
@@ -241,6 +307,7 @@ def build_interfaces(parser: Any) -> dict[str, Any]:
             caption=f"{enabled} enabled · {total - enabled} disabled · {zones} zones",
             export_filename="fortigate_interfaces.csv",
             row_class_fn=_iface_cls,
+            drop_keys=empty_optional,
         ),
     ]
     return {"section": "Interfaces", "blocks": blocks}
@@ -410,43 +477,463 @@ def build_network(parser: Any) -> dict[str, Any]:
                 )
             )
 
+    ipam_rows = parser.parse_ipam()
+    fext_rows = parser.parse_fortiextender()
+    robj_count = (
+        len(robj.get("prefix_lists", []))
+        + len(robj.get("route_maps", []))
+        + len(robj.get("aspath_lists", []))
+    )
+
     tabs = [
-        {"label": "IPAM", "blocks": [_table_block(parser.parse_ipam(), "fg_ipam", empty_text="No IPAM configuration found.")]},
-        {"label": "FortiExtender", "blocks": [_table_block(parser.parse_fortiextender(), "fg_fortiext", empty_text="No FortiExtender configuration found.")]},
-        {"label": "SD-WAN", "blocks": sdwan_blocks},
+        {"label": "SD-WAN", "count": len(sdwan.get("services", [])) if sdwan else 0, "blocks": sdwan_blocks},
         {
             "label": "Static Routes",
+            "count": len(static_rows),
             "blocks": [
                 {"type": "route_lookup", "vendor": "fg"},
                 _table_block(static_rows, "fg_static_routes", empty_text="No static routes configured.", row_class_fn=_dis_cls, legend=_route_legend, caption=f"{st_en} active · {len(static_rows) - st_en} disabled"),
             ],
         },
-        {"label": "Policy Routes", "blocks": [_table_block(pr_rows, "fg_policy_routes", empty_text="No policy routes configured.", row_class_fn=_dis_cls, legend=_route_legend, caption=f"{pr_en} active · {len(pr_rows) - pr_en} disabled")]},
-        {"label": "RIP", "blocks": rip_blocks},
-        {"label": "OSPF", "blocks": ospf_blocks},
-        {"label": "BGP", "blocks": bgp_blocks},
-        {"label": "Routing Objects", "blocks": robj_blocks},
-        {"label": "Multicast", "blocks": mcast_blocks},
+        {"label": "Policy Routes", "count": len(pr_rows), "blocks": [_table_block(pr_rows, "fg_policy_routes", empty_text="No policy routes configured.", row_class_fn=_dis_cls, legend=_route_legend, caption=f"{pr_en} active · {len(pr_rows) - pr_en} disabled")]},
+        {"label": "RIP", "count": len(rip.get("networks", [])) if rip else 0, "blocks": rip_blocks},
+        {"label": "OSPF", "count": len(ospf.get("areas", [])) if ospf else 0, "blocks": ospf_blocks},
+        {"label": "BGP", "count": len(bgp.get("neighbors", [])) if bgp else 0, "blocks": bgp_blocks},
+        {"label": "Routing Objects", "count": robj_count, "blocks": robj_blocks},
+        {"label": "Multicast", "count": len(mcast.get("interfaces", [])) if mcast else 0, "blocks": mcast_blocks},
+        {"label": "IPAM", "count": len(ipam_rows), "blocks": [_table_block(ipam_rows, "fg_ipam", empty_text="No IPAM configuration found.")]},
+        {"label": "FortiExtender", "count": len(fext_rows), "blocks": [_table_block(fext_rows, "fg_fortiext", empty_text="No FortiExtender configuration found.")]},
     ]
     return {"section": "Network", "blocks": [{"type": "tabs", "id": "fg_network_tabs", "tabs": tabs}]}
 
 
+def build_interfaces_network(parser: Any) -> dict[str, Any]:
+    iface_res = build_interfaces(parser)
+    iface_rows = parser.parse_interfaces() or []
+    net_res = build_network(parser)
+    net_tabs = net_res["blocks"][0]["tabs"] if net_res.get("blocks") else []
+    tabs = [
+        {"label": "Interfaces", "count": len(iface_rows), "blocks": iface_res.get("blocks", [])},
+        *net_tabs,
+    ]
+    return {"section": "Interfaces & Network", "blocks": [{"type": "tabs", "id": "fg_iface_net_tabs", "tabs": tabs}]}
+
+
 # ── 4. Policy & Objects ──────────────────────────────────────────────────────
-def build_policy_objects(parser: Any) -> dict[str, Any]:
+def _split_tokens(val: Any) -> list[str]:
+    s = str(val or "").strip()
+    if not s or s == "-":
+        return []
+    return [tok.strip() for tok in s.split(",") if tok.strip()]
+
+
+def _format_policy_nat_label(p: dict[str, Any], central_nat: bool) -> str:
+    if central_nat:
+        return "Central NAT"
+    tags: list[str] = []
+    if p.get("_nat64"):
+        tags.append("NAT64")
+    if p.get("_nat46"):
+        tags.append("NAT46")
+    if p.get("_natinbound") or p.get("_natoutbound") or p.get("_natip"):
+        tags.append("IPsec NAT")
+    if tags:
+        prefix = "Enable" if str(p.get("NAT", "")).lower() == "enable" else "Special"
+        return f"{prefix} ({', '.join(tags)})"
+    if str(p.get("NAT", "")).lower() == "enable":
+        pools = p.get("_poolname") or []
+        if p.get("_ippool") or pools:
+            pool_txt = ", ".join(pools) if pools else "IP Pool"
+            base = f"Enable (Pool: {pool_txt})"
+        else:
+            base = "Enable (Interface IP)"
+        if p.get("_fixedport"):
+            base += " · Fixed Port"
+        return base
+    return str(p.get("NAT", "-"))
+
+
+def _resolve_egress_ips(
+    dst_iface_str: str,
+    iface_ip_map: dict[str, str],
+    sdwan_zone_members: dict[str, list[str]],
+) -> str:
+    tokens = _split_tokens(dst_iface_str)
+    if not tokens:
+        return "-"
+    resolved: list[str] = []
+    for tok in tokens:
+        members = sdwan_zone_members.get(tok)
+        if members:
+            member_ips = [f"{m}: {iface_ip_map[m]}" for m in members if m in iface_ip_map]
+            if member_ips:
+                resolved.append(f"{tok} [{', '.join(member_ips)}]")
+            else:
+                resolved.append(f"{tok} (SD-WAN)")
+        elif tok in iface_ip_map:
+            resolved.append(f"{tok}: {iface_ip_map[tok]}")
+        elif tok.lower() == "any":
+            resolved.append("Any Egress IP")
+        else:
+            resolved.append(f"{tok} (Dynamic / Unconfigured)")
+    return ", ".join(resolved)
+
+
+def _build_fg_nat_blocks(parser: Any, policies: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    central_nat = bool(parser.is_central_nat_enabled()) if hasattr(parser, "is_central_nat_enabled") else False
+    central_snat = parser.parse_central_snat() if hasattr(parser, "parse_central_snat") else []
+    vips = parser.parse_vip() or []
+    vip_groups = parser.parse_vip_groups() if hasattr(parser, "parse_vip_groups") else []
+    ip_pools = parser.parse_ip_pools() or []
+
+    # Interface, Zone & SD-WAN lookups for resolving egress interface SNAT IPs
+    iface_ip_map: dict[str, str] = {}
+    sdwan_zone_members: dict[str, list[str]] = {}
+    for row in parser.parse_interfaces() or []:
+        if str(row.get("Type", "")).lower() == "zone":
+            zname = str(row.get("Zone", "")).strip()
+            zmembers = _split_tokens(row.get("Members", ""))
+            if zname and zmembers:
+                sdwan_zone_members[zname] = zmembers
+            continue
+        raw_name = str(row.get("Name", "")).replace("\u00a0", "").replace("┗", "").strip()
+        ip_val = str(row.get("IP/Netmask", "")).strip()
+        if raw_name and ip_val and ip_val not in ("-", "0.0.0.0 0.0.0.0", "0.0.0.0/0", "dhcp", "pppoe"):
+            iface_ip_map[raw_name] = ip_val
+
+    sdwan = parser.parse_sdwan() or {}
+    for m in sdwan.get("members", []) or []:
+        zname = str(m.get("Zone") or m.get("zone") or "").strip()
+        iname = str(m.get("Interface") or m.get("interface") or "").strip()
+        if zname and iname and iname != "-":
+            sdwan_zone_members.setdefault(zname, []).append(iname)
+
+    pool_range_map: dict[str, str] = {
+        str(p.get("Name", "")): str(p.get("External IP Range", "-"))
+        for p in ip_pools
+        if p.get("Name")
+    }
+
+    # Policy usage indexes
+    dst_policy_refs: dict[str, list[str]] = {}
+    pool_policy_refs: dict[str, list[str]] = {}
+    for p in policies:
+        pid = str(p.get("ID", "?"))
+        pname = str(p.get("Name", "")).strip()
+        plabel = f"#{pid}" + (f" ({pname})" if pname and pname != "-" else "")
+        for tok in _split_tokens(p.get("Destination")):
+            dst_policy_refs.setdefault(tok, []).append(plabel)
+        for pool_name in p.get("_poolname") or []:
+            pool_policy_refs.setdefault(pool_name, []).append(f"Policy {plabel}")
+
+    for cs in central_snat:
+        cid = str(cs.get("ID", "?"))
+        for pool_name in cs.get("_pool_list") or []:
+            pool_policy_refs.setdefault(pool_name, []).append(f"Central SNAT #{cid}")
+
+    vip_group_refs: dict[str, list[str]] = {}
+    vip_grp_rows: list[dict[str, Any]] = []
+    for vg in vip_groups:
+        vg_name = str(vg.get("Name", ""))
+        direct_refs = dst_policy_refs.get(vg_name, [])
+        for mem in vg.get("_member_list") or []:
+            vip_group_refs.setdefault(mem, []).extend(direct_refs or [f"Group: {vg_name}"])
+        vip_grp_rows.append(
+            {
+                **vg,
+                "Used By Policies": ", ".join(dict.fromkeys(direct_refs)) if direct_refs else "Unused",
+            }
+        )
+
+    # ── Sub-tab 1: Outbound SNAT ──────────────────────────────────────────────
+    snat_blocks: list[dict[str, Any]] = []
+    if central_snat or central_nat:
+        snat_blocks.append({"type": "section_header", "title": "Central SNAT Rules"})
+        snat_legend = [
+            {"label": "IP Pool SNAT (blue)", "variant": "info"},
+            {"label": "No-NAT / Excluded (muted)", "variant": "muted"},
+            {"label": "Disabled Rule (red)", "variant": "danger"},
+        ]
+        snat_blocks.append(
+            _table_block(
+                central_snat,
+                "fg_central_snat",
+                empty_text="Central NAT is enabled, but no Central SNAT rules are configured.",
+                export_filename="fg_central_snat.csv",
+                row_class_fn=lambda r: (
+                    "row-danger"
+                    if str(r.get("Status", "")).lower() == "disable"
+                    else (
+                        "row-muted"
+                        if str(r.get("NAT", "")).lower() == "disable"
+                        else ("row-info" if str(r.get("IP Pool", "-")) != "-" else "")
+                    )
+                ),
+                legend=snat_legend,
+                caption=f"{len(central_snat)} central SNAT rules",
+            )
+        )
+
+    resolved_snat_rows: list[dict[str, Any]] = []
+    for p in policies:
+        nat_on = str(p.get("NAT", "")).lower() == "enable"
+        special = bool(p.get("_nat64") or p.get("_nat46") or p.get("_natinbound") or p.get("_natoutbound") or p.get("_natip"))
+        if not nat_on and not special:
+            continue
+
+        pools = p.get("_poolname") or []
+        if p.get("_nat64"):
+            nat_type = "NAT64"
+        elif p.get("_nat46"):
+            nat_type = "NAT46"
+        elif p.get("_natinbound") or p.get("_natoutbound") or p.get("_natip"):
+            nat_type = "IPsec NAT"
+        elif p.get("_ippool") or pools:
+            nat_type = "IP Pool"
+        else:
+            nat_type = "Interface IP"
+
+        if nat_type in ("IP Pool", "NAT64", "NAT46") and pools:
+            pool_display = ", ".join(pools)
+            trans_ips = ", ".join(f"{pn} ({pool_range_map.get(pn, 'Missing Pool')})" for pn in pools)
+        elif p.get("_natip"):
+            pool_display = "-"
+            trans_ips = str(p.get("_natip"))
+        else:
+            pool_display = "-"
+            trans_ips = _resolve_egress_ips(str(p.get("Dst Interface", "")), iface_ip_map, sdwan_zone_members)
+
+        if p.get("_fixedport"):
+            port_mode = "Fixed Port (No PAT)"
+        elif p.get("_port_preserve") == "enable":
+            port_mode = "Port Preserve"
+        else:
+            port_mode = "Dynamic PAT"
+
+        resolved_snat_rows.append(
+            {
+                "Policy ID": p.get("ID", "-"),
+                "Policy Name": p.get("Name", "-"),
+                "Src → Dst Interface": f"{p.get('Src Interface', '-')} → {p.get('Dst Interface', '-')}",
+                "Source": p.get("Source", "-"),
+                "Destination": p.get("Destination", "-"),
+                "NAT Type": nat_type,
+                "Pool Name": pool_display,
+                "Translated IP(s)": trans_ips,
+                "Port Behavior": port_mode,
+                "Status": p.get("Status", "Enable"),
+                "_nat_type": nat_type,
+                "_fixed": bool(p.get("_fixedport")),
+            }
+        )
+
+    if not central_nat:
+        snat_blocks.append({"type": "section_header", "title": "Policy-Based Outbound SNAT"})
+        pol_snat_legend = [
+            {"label": "Interface IP SNAT (default)", "variant": "default"},
+            {"label": "IP Pool SNAT (blue)", "variant": "info"},
+            {"label": "Fixed Port / Special NAT (amber)", "variant": "warn"},
+            {"label": "Disabled Policy (red)", "variant": "danger"},
+        ]
+        snat_blocks.append(
+            _table_block(
+                resolved_snat_rows,
+                "fg_policy_snat",
+                empty_text="No NAT-enabled firewall policies found.",
+                export_filename="fg_policy_snat.csv",
+                row_class_fn=lambda r: (
+                    "row-danger"
+                    if str(r.get("Status", "")).lower() == "disable"
+                    else (
+                        "row-warn"
+                        if r.get("_fixed") or r.get("_nat_type") in ("NAT64", "NAT46", "IPsec NAT")
+                        else ("row-info" if r.get("_nat_type") == "IP Pool" else "")
+                    )
+                ),
+                legend=pol_snat_legend,
+                caption=f"{len(resolved_snat_rows)} NAT-enabled policies",
+            )
+        )
+    elif resolved_snat_rows:
+        snat_blocks.append(
+            {
+                "type": "expander",
+                "title": f"Legacy Per-Policy NAT Flags ({len(resolved_snat_rows)} ignored under Central NAT)",
+                "open": False,
+                "blocks": [
+                    _table_block(
+                        resolved_snat_rows,
+                        "fg_policy_snat_ignored",
+                        export_filename="fg_policy_snat_ignored.csv",
+                    )
+                ],
+            }
+        )
+
+    # ── Sub-tab 2: Virtual IPs (DNAT) ─────────────────────────────────────────
+    enriched_vips: list[dict[str, Any]] = []
+    for v in vips:
+        vname = str(v.get("Name", ""))
+        refs = list(dst_policy_refs.get(vname, []))
+        refs.extend(vip_group_refs.get(vname, []))
+        used_str = ", ".join(dict.fromkeys(refs)) if refs else "Unused"
+        enriched_vips.append({**v, "Used By Policies": used_str})
+
+    vip_legend = [
+        {"label": "Active & Referenced (default)", "variant": "default"},
+        {"label": "Unused by Any Policy (muted)", "variant": "muted"},
+        {"label": "Disabled VIP (red)", "variant": "danger"},
+    ]
+    vip_blocks: list[dict[str, Any]] = [
+        _table_block(
+            enriched_vips,
+            "fg_vips",
+            empty_text="No Virtual IPs found.",
+            export_filename="fg_virtual_ips.csv",
+            row_class_fn=lambda r: (
+                "row-danger"
+                if str(r.get("_status", "Enable")).lower() == "disable"
+                else ("row-muted" if r.get("Used By Policies") == "Unused" else "")
+            ),
+            legend=vip_legend,
+            caption=f"{len(enriched_vips)} Virtual IPs",
+        )
+    ]
+    if vip_grp_rows:
+        vip_blocks.append({"type": "section_header", "title": "VIP Groups"})
+        vip_blocks.append(
+            _table_block(
+                vip_grp_rows,
+                "fg_vip_groups",
+                export_filename="fg_vip_groups.csv",
+                row_class_fn=lambda r: "row-muted" if r.get("Used By Policies") == "Unused" else "",
+                legend=[
+                    {"label": "Referenced Group (default)", "variant": "default"},
+                    {"label": "Unused Group (muted)", "variant": "muted"},
+                ],
+                caption=f"{len(vip_grp_rows)} VIP groups",
+            )
+        )
+
+    # ── Sub-tab 3: IP Pools (SNAT) ────────────────────────────────────────────
+    enriched_pools: list[dict[str, Any]] = []
+    for pool in ip_pools:
+        pname = str(pool.get("Name", ""))
+        refs = pool_policy_refs.get(pname, [])
+        used_str = ", ".join(dict.fromkeys(refs)) if refs else "Unused"
+        enriched_pools.append({**pool, "Used By Policies": used_str})
+
+    pool_blocks = [
+        _table_block(
+            enriched_pools,
+            "fg_ip_pools",
+            empty_text="No IP pools found.",
+            export_filename="fg_ip_pools.csv",
+            row_class_fn=lambda r: "row-muted" if r.get("Used By Policies") == "Unused" else "",
+            legend=[
+                {"label": "Referenced Pool (default)", "variant": "default"},
+                {"label": "Unused Pool (muted)", "variant": "muted"},
+            ],
+            caption=f"{len(enriched_pools)} IP pools",
+        )
+    ]
+
+    mode_banner = (
+        {
+            "type": "alert",
+            "variant": "warn",
+            "text": "Central NAT mode is enabled (set central-nat enable). Outbound SNAT is controlled by Central SNAT rules rather than per-policy NAT settings.",
+        }
+        if central_nat
+        else {
+            "type": "alert",
+            "variant": "info",
+            "text": "Policy-Based NAT mode is active. Outbound SNAT is configured per firewall policy (egress interface IP or IP Pools); inbound DNAT uses Virtual IPs.",
+        }
+    )
+
+    return [
+        mode_banner,
+        {
+            "type": "tabs",
+            "id": "fg_nat_sub",
+            "tabs": [
+                {"label": "Outbound SNAT", "blocks": snat_blocks},
+                {"label": "Virtual IPs / DNAT", "blocks": vip_blocks},
+                {"label": "IP Pools", "blocks": pool_blocks},
+            ],
+        },
+    ]
+
+
+def build_policies_nat(parser: Any) -> dict[str, Any]:
     policies = parser.parse_policies()
+    central_nat = bool(parser.is_central_nat_enabled()) if hasattr(parser, "is_central_nat_enabled") else False
+    display_policies = [
+        {**p, "NAT": _format_policy_nat_label(p, central_nat)}
+        for p in policies
+    ]
     iface_names = parser.get_interface_names() if hasattr(parser, "get_interface_names") else []
     iface_opts = ["any"] + iface_names
 
-    _dis_warn = lambda r: "row-warn" if str(r.get("Status", "")).lower() == "disable" else ""
-    _pol_legend = [
-        {"label": "Enabled Policy (default)", "variant": "default"},
-        {"label": "Disabled Policy (amber)", "variant": "warn"},
-    ]
+    _dis_cls = lambda r: "row-danger" if str(r.get("Status", "")).lower() == "disable" else ""
+    fw_dis = sum(1 for r in display_policies if str(r.get("Status", "")).lower() == "disable")
+    proxy_pols = parser.parse_proxy_policy()
+    px_dis = sum(1 for r in proxy_pols if str(r.get("Status", "")).lower() == "disable")
+    auth_rules = parser.parse_auth_rules()
 
+    nat_blocks = _build_fg_nat_blocks(parser, policies)
+    # Count NAT items: Outbound SNAT + VIPs + IP Pools
+    snat_cnt = len(parser.parse_central_snat()) if central_nat and hasattr(parser, "parse_central_snat") else sum(
+        1 for p in policies if str(p.get("NAT", "")).lower() == "enable"
+    )
+    nat_total = snat_cnt + len(parser.parse_vip() or []) + len(parser.parse_ip_pools() or [])
+
+    tabs = [
+        {
+            "label": "Firewall Policy",
+            "count": len(display_policies),
+            "blocks": [
+                {"type": "policy_simulator", "vendor": "fg", "interfaces": iface_opts},
+                _table_block(
+                    display_policies,
+                    "fg_fw_policies",
+                    empty_text="No firewall policies found.",
+                    row_class_fn=_dis_cls,
+                    legend=POLICY_LEGEND,
+                    export_filename="fg_firewall_policies.csv",
+                    caption=policy_caption(len(display_policies), fw_dis),
+                ),
+            ],
+        },
+        {"label": "NAT", "count": nat_total, "blocks": nat_blocks},
+        {
+            "label": "Proxy Policy",
+            "count": len(proxy_pols),
+            "blocks": [
+                _table_block(
+                    proxy_pols,
+                    "fg_proxy_pol",
+                    empty_text="No proxy policies found.",
+                    row_class_fn=_dis_cls,
+                    legend=POLICY_LEGEND,
+                    export_filename="fg_proxy_policies.csv",
+                    caption=policy_caption(len(proxy_pols), px_dis),
+                )
+            ],
+        },
+        {"label": "Auth Rules", "count": len(auth_rules), "blocks": [_table_block(auth_rules, "fg_auth_rules", empty_text="No authentication rules found.")]},
+        {"label": "Cleanup & Hygiene", "blocks": build_hygiene_blocks(analyze_fortigate_hygiene(parser), "fg")},
+    ]
+    return {"section": "Policies & NAT", "blocks": [{"type": "tabs", "id": "fg_po_tabs", "tabs": tabs}]}
+
+
+def build_objects(parser: Any) -> dict[str, Any]:
     addr = parser.parse_addresses()
     addr_tabs = [
         {
             "label": label,
+            "count": len(addr.get(data_key, [])),
             "blocks": [
                 _table_block(
                     addr.get(data_key, []),
@@ -465,46 +952,35 @@ def build_policy_objects(parser: Any) -> dict[str, Any]:
             ("regex", "regex", "Host Regex"),
         ]
     ]
+    addr_total = sum(len(addr.get(k, [])) for k in ("subnet", "iprange", "fqdn", "ipmask", "groups", "regex"))
 
     svc_data = parser.parse_services()
     services = svc_data.get("services", [])
-
+    schedules = parser.parse_schedules()
     proto_rows = parser.parse_protocol_options()
+    shaping = parser.parse_traffic_shaping()
+    vservers = parser.parse_virtual_servers()
+    hchecks = parser.parse_health_check()
 
     tabs = [
-        {
-            "label": "Firewall Policy",
-            "blocks": [
-                {
-                    "type": "expander",
-                    "title": "🔍 Policy Lookup (Traffic Simulator)",
-                    "blocks": [{"type": "fg_policy_lookup", "interfaces": iface_opts}],
-                },
-                _table_block(
-                    policies,
-                    "fg_fw_policies",
-                    empty_text="No firewall policies found.",
-                    row_class_fn=_dis_warn,
-                    legend=_pol_legend,
-                    export_filename="fg_firewall_policies.csv",
-                    caption=f"{len(policies)} policies",
-                ),
-            ],
-        },
-        {"label": "Proxy Policy", "blocks": [_table_block(parser.parse_proxy_policy(), "fg_proxy_pol", empty_text="No proxy policies found.", row_class_fn=_dis_warn, legend=_pol_legend, export_filename="fg_proxy_policies.csv")]},
-        {"label": "Auth Rules", "blocks": [_table_block(parser.parse_auth_rules(), "fg_auth_rules", empty_text="No authentication rules found.")]},
-        {"label": "Addresses", "blocks": [{"type": "tabs", "id": "fg_addr_sub", "tabs": addr_tabs}]},
-        {"label": "Services", "blocks": [_table_block(services, "fg_services", empty_text="No custom services found.", filter_col="Category")]},
-        {"label": "Schedules", "blocks": [_table_block(parser.parse_schedules(), "fg_schedules", empty_text="No schedules found.")]},
-        {"label": "Virtual IPs", "blocks": [_table_block(parser.parse_vip(), "fg_vips", empty_text="No Virtual IPs found.", export_filename="fg_virtual_ips.csv")]},
-        {"label": "IP Pools", "blocks": [_table_block(parser.parse_ip_pools(), "fg_ip_pools", empty_text="No IP pools found.")]},
-        {"label": "Protocol Options", "blocks": [_table_block(proto_rows, "fg_proto_opts", empty_text="No protocol options profiles found.", filter_col="Profile")]},
-        {"label": "Traffic Shaping", "blocks": [_table_block(parser.parse_traffic_shaping(), "fg_traffic_shaping", empty_text="No traffic shapers found.")]},
-        {"label": "Virtual Servers", "blocks": [_table_block(parser.parse_virtual_servers(), "fg_vservers", empty_text="No virtual servers found.")]},
-        {"label": "Health Check", "blocks": [_table_block(parser.parse_health_check(), "fg_health_checks", empty_text="No health check monitors found.")]},
-        {"label": "Cleanup & Hygiene", "blocks": build_hygiene_blocks(analyze_fortigate_hygiene(parser), "fg")},
+        {"label": "Addresses", "count": addr_total, "blocks": [{"type": "tabs", "id": "fg_addr_sub", "tabs": addr_tabs}]},
+        {"label": "Services", "count": len(services), "blocks": [_table_block(services, "fg_services", empty_text="No custom services found.", filter_col="Category")]},
+        {"label": "Schedules", "count": len(schedules), "blocks": [_table_block(schedules, "fg_schedules", empty_text="No schedules found.")]},
+        {"label": "Protocol Options", "count": len(proto_rows), "blocks": [_table_block(proto_rows, "fg_proto_opts", empty_text="No protocol options profiles found.", filter_col="Profile")]},
+        {"label": "Traffic Shaping", "count": len(shaping), "blocks": [_table_block(shaping, "fg_traffic_shaping", empty_text="No traffic shapers found.")]},
+        {"label": "Virtual Servers", "count": len(vservers), "blocks": [_table_block(vservers, "fg_vservers", empty_text="No virtual servers found.")]},
+        {"label": "Health Check", "count": len(hchecks), "blocks": [_table_block(hchecks, "fg_health_checks", empty_text="No health check monitors found.")]},
     ]
-    return {"section": "Policy & Objects", "blocks": [{"type": "tabs", "id": "fg_po_tabs", "tabs": tabs}]}
+    return {"section": "Objects", "blocks": [{"type": "tabs", "id": "fg_obj_tabs", "tabs": tabs}]}
+
+
+def build_policy_objects(parser: Any) -> dict[str, Any]:
+    pol_tabs = build_policies_nat(parser)["blocks"][0]["tabs"]
+    obj_tabs = build_objects(parser)["blocks"][0]["tabs"]
+    # Keep Cleanup & Hygiene at the end for legacy Policy & Objects callers
+    hyg = [t for t in pol_tabs if t["label"] == "Cleanup & Hygiene"]
+    pol_core = [t for t in pol_tabs if t["label"] != "Cleanup & Hygiene"]
+    return {"section": "Policy & Objects", "blocks": [{"type": "tabs", "id": "fg_po_tabs", "tabs": [*pol_core, *obj_tabs, *hyg]}]}
 
 
 # ── 5. Security ──────────────────────────────────────────────────────────────
@@ -718,21 +1194,34 @@ def build_security(parser: Any) -> dict[str, Any]:
             _table_block(p.get("protocols", []), f"fg_ssl_{i}", empty_text="No protocol configurations found."),
         ]
 
+    av_list = parser.parse_antivirus()
+    wf_list = parser.parse_webfilter()
+    dns_list = parser.parse_dnsfilter()
+    app_list = parser.parse_appcontrol()
+    ips_list = parser.parse_ips()
+    ff_list = parser.parse_filefilter()
+    ef_list = parser.parse_emailfilter()
+    voip_list = parser.parse_voip()
+    waf_list = parser.parse_waf()
+    ssl_list = parser.parse_ssl_inspection()
+    wro_list = parser.parse_web_rating_override()
+    wpo_list = parser.parse_web_profile_override()
+
     tabs = [
-        {"label": "Antivirus", "blocks": _sec_profile_selector(parser.parse_antivirus(), "fg_sel_av", _av)},
-        {"label": "Web Filter", "blocks": _sec_profile_selector(parser.parse_webfilter(), "fg_sel_wf", _wf)},
-        {"label": "DNS Filter", "blocks": _sec_profile_selector(parser.parse_dnsfilter(), "fg_sel_dns", _dns)},
-        {"label": "App Control", "blocks": _sec_profile_selector(parser.parse_appcontrol(), "fg_sel_app", _app)},
-        {"label": "IPS", "blocks": _sec_profile_selector(parser.parse_ips(), "fg_sel_ips", _ips)},
-        {"label": "File Filter", "blocks": _sec_profile_selector(parser.parse_filefilter(), "fg_sel_ff", _ff)},
-        {"label": "Email Filter", "blocks": _sec_profile_selector(parser.parse_emailfilter(), "fg_sel_ef", _ef)},
-        {"label": "VoIP", "blocks": _sec_profile_selector(parser.parse_voip(), "fg_sel_voip", _voip)},
-        {"label": "WAF", "blocks": _sec_profile_selector(parser.parse_waf(), "fg_sel_waf", _waf)},
-        {"label": "SSL Inspection", "blocks": _sec_profile_selector(parser.parse_ssl_inspection(), "fg_sel_ssl", _ssl)},
-        {"label": "Web Rating Overrides", "blocks": [_table_block(parser.parse_web_rating_override(), "fg_wro", empty_text="No web rating overrides configured.", filter_col="Category Name")]},
-        {"label": "Web Profile Overrides", "blocks": [_table_block(parser.parse_web_profile_override(), "fg_wpo", empty_text="No web profile overrides configured.")]},
+        {"label": "Antivirus", "count": len(av_list), "blocks": _sec_profile_selector(av_list, "fg_sel_av", _av)},
+        {"label": "Web Filter", "count": len(wf_list), "blocks": _sec_profile_selector(wf_list, "fg_sel_wf", _wf)},
+        {"label": "DNS Filter", "count": len(dns_list), "blocks": _sec_profile_selector(dns_list, "fg_sel_dns", _dns)},
+        {"label": "App Control", "count": len(app_list), "blocks": _sec_profile_selector(app_list, "fg_sel_app", _app)},
+        {"label": "IPS", "count": len(ips_list), "blocks": _sec_profile_selector(ips_list, "fg_sel_ips", _ips)},
+        {"label": "File Filter", "count": len(ff_list), "blocks": _sec_profile_selector(ff_list, "fg_sel_ff", _ff)},
+        {"label": "Email Filter", "count": len(ef_list), "blocks": _sec_profile_selector(ef_list, "fg_sel_ef", _ef)},
+        {"label": "VoIP", "count": len(voip_list), "blocks": _sec_profile_selector(voip_list, "fg_sel_voip", _voip)},
+        {"label": "WAF", "count": len(waf_list), "blocks": _sec_profile_selector(waf_list, "fg_sel_waf", _waf)},
+        {"label": "SSL Inspection", "count": len(ssl_list), "blocks": _sec_profile_selector(ssl_list, "fg_sel_ssl", _ssl)},
+        {"label": "Web Rating Overrides", "count": len(wro_list), "blocks": [_table_block(wro_list, "fg_wro", empty_text="No web rating overrides configured.", filter_col="Category Name")]},
+        {"label": "Web Profile Overrides", "count": len(wpo_list), "blocks": [_table_block(wpo_list, "fg_wpo", empty_text="No web profile overrides configured.")]},
     ]
-    return {"section": "Security", "blocks": [{"type": "tabs", "id": "fg_sec_tabs", "tabs": tabs}]}
+    return {"section": "Security Profiles", "blocks": [{"type": "tabs", "id": "fg_sec_tabs", "tabs": tabs}]}
 
 
 # ── 6. VPN ───────────────────────────────────────────────────────────────────
@@ -899,13 +1388,15 @@ def build_vpn(parser: Any) -> dict[str, Any]:
     inspector_blocks = build_vpn_inspector_blocks(inspect_fortigate_vpns(parser), "fg")
     ssl_mig_blocks = build_ssl_to_ipsec_blocks(analyze_fortigate_ssl_to_ipsec(parser))
 
+    conc_list = parser.parse_ipsec_concentrator()
+    client_list = parser.parse_ssl_clients()
     tabs = [
-        {"label": "Site-to-Site Inspector", "blocks": inspector_blocks},
-        {"label": "IPSec Tunnels", "blocks": ipsec_blocks},
-        {"label": "IPSec Concentrator", "blocks": [_table_block(parser.parse_ipsec_concentrator(), "fg_ipsec_conc", empty_text="No IPSec concentrators configured.")]},
-        {"label": "SSL-VPN Portals", "blocks": portal_blocks},
+        {"label": "Site-to-Site Inspector", "count": len(phase1_list), "blocks": inspector_blocks},
+        {"label": "IPSec Tunnels", "count": len(phase1_list), "blocks": ipsec_blocks},
+        {"label": "IPSec Concentrator", "count": len(conc_list), "blocks": [_table_block(conc_list, "fg_ipsec_conc", empty_text="No IPSec concentrators configured.")]},
+        {"label": "SSL-VPN Portals", "count": len(portals), "blocks": portal_blocks},
         {"label": "SSL-VPN Settings", "blocks": ssl_set_blocks},
-        {"label": "SSL-VPN Clients", "blocks": [_table_block(parser.parse_ssl_clients(), "fg_ssl_clients", empty_text="No SSL-VPN client configurations found.")]},
+        {"label": "SSL-VPN Clients", "count": len(client_list), "blocks": [_table_block(client_list, "fg_ssl_clients", empty_text="No SSL-VPN client configurations found.")]},
         {"label": "SSL-to-IPSec Migration", "blocks": ssl_mig_blocks},
     ]
     return {"section": "VPN", "blocks": [{"type": "tabs", "id": "fg_vpn_tabs", "tabs": tabs}]}
@@ -936,57 +1427,75 @@ def build_user_auth(parser: Any) -> dict[str, Any]:
             {"type": "card", "rows": [_toggle_row("HTTP Redirect to Auth Portal", auth.get("http_redirect", "disable"))]},
         ]
 
+    users_local = parser.parse_user_local()
+    user_groups = parser.parse_user_groups()
+    guest_users = parser.parse_guest_users()
+    ldap_list = parser.parse_ldap()
+    radius_list = parser.parse_radius()
+    fsso_list = parser.parse_fsso()
+    token_list = parser.parse_fortitoken()
+
     tabs = [
         {
             "label": "User Definition",
+            "count": len(users_local),
             "blocks": [
                 _table_block(
-                    parser.parse_user_local(),
+                    users_local,
                     "fg_users",
                     empty_text="No local users configured.",
-                    row_class_fn=lambda r: "row-warn" if str(r.get("Status", "")).lower() == "disable" else "",
+                    row_class_fn=lambda r: "row-danger" if str(r.get("Status", "")).lower() == "disable" else "",
                     legend=[
                         {"label": "Enabled User (default)", "variant": "default"},
-                        {"label": "Disabled User (amber)", "variant": "warn"},
+                        {"label": "Disabled User (red)", "variant": "danger"},
                     ],
                 )
             ],
         },
-        {"label": "User Groups", "blocks": [_table_block(parser.parse_user_groups(), "fg_user_groups", empty_text="No user groups configured.")]},
-        {"label": "Guest Management", "blocks": [_table_block(parser.parse_guest_users(), "fg_guest_users", empty_text="No guest users configured.")]},
-        {"label": "LDAP Servers", "blocks": [_table_block(parser.parse_ldap(), "fg_ldap", empty_text="No LDAP servers configured.", export_filename="fg_ldap_servers.csv")]},
-        {"label": "RADIUS Servers", "blocks": [_table_block(parser.parse_radius(), "fg_radius", empty_text="No RADIUS servers configured.", export_filename="fg_radius_servers.csv")]},
-        {"label": "Single Sign-On", "blocks": [_table_block(parser.parse_fsso(), "fg_fsso", empty_text="No FSSO agents configured.")]},
-        {"label": "FortiToken", "blocks": [_table_block(parser.parse_fortitoken(), "fg_fortitoken", empty_text="No FortiTokens configured.", export_filename="fg_fortitokens.csv")]},
+        {"label": "User Groups", "count": len(user_groups), "blocks": [_table_block(user_groups, "fg_user_groups", empty_text="No user groups configured.")]},
+        {"label": "Guest Management", "count": len(guest_users), "blocks": [_table_block(guest_users, "fg_guest_users", empty_text="No guest users configured.")]},
+        {"label": "LDAP Servers", "count": len(ldap_list), "blocks": [_table_block(ldap_list, "fg_ldap", empty_text="No LDAP servers configured.", export_filename="fg_ldap_servers.csv")]},
+        {"label": "RADIUS Servers", "count": len(radius_list), "blocks": [_table_block(radius_list, "fg_radius", empty_text="No RADIUS servers configured.", export_filename="fg_radius_servers.csv")]},
+        {"label": "Single Sign-On", "count": len(fsso_list), "blocks": [_table_block(fsso_list, "fg_fsso", empty_text="No FSSO agents configured.")]},
+        {"label": "FortiToken", "count": len(token_list), "blocks": [_table_block(token_list, "fg_fortitoken", empty_text="No FortiTokens configured.", export_filename="fg_fortitokens.csv")]},
         {"label": "Auth Settings", "blocks": auth_blocks},
     ]
-    return {"section": "User & Auth", "blocks": [{"type": "tabs", "id": "fg_user_tabs", "tabs": tabs}]}
+    return {"section": "Users & Auth", "blocks": [{"type": "tabs", "id": "fg_user_tabs", "tabs": tabs}]}
 
 
 # ── 8. WiFi & Switch ─────────────────────────────────────────────────────────
 def build_wifi(parser: Any) -> dict[str, Any]:
+    aps = parser.parse_managed_fortiaps()
+    ssids = parser.parse_ssids()
+    ap_profs = parser.parse_fortiap_profiles()
+    wids = parser.parse_wids_profiles()
+    switches = parser.parse_managed_switches()
+    port_pols = parser.parse_switch_port_policies()
+    nac_pols = parser.parse_nac_policies()
+
     tabs = [
-        {"label": "Managed FortiAPs", "blocks": [_table_block(parser.parse_managed_fortiaps(), "fg_managed_aps", empty_text="No managed FortiAPs configured.", export_filename="fg_managed_fortiaps.csv")]},
+        {"label": "Managed FortiAPs", "count": len(aps), "blocks": [_table_block(aps, "fg_managed_aps", empty_text="No managed FortiAPs configured.", export_filename="fg_managed_fortiaps.csv")]},
         {
             "label": "SSIDs",
+            "count": len(ssids),
             "blocks": [
                 _table_block(
-                    parser.parse_ssids(),
+                    ssids,
                     "fg_ssids",
                     empty_text="No SSIDs configured.",
-                    row_class_fn=lambda r: "row-warn" if str(r.get("Status", "")).lower() == "disable" else "",
+                    row_class_fn=lambda r: "row-danger" if str(r.get("Status", "")).lower() == "disable" else "",
                     legend=[
                         {"label": "Enabled SSID (default)", "variant": "default"},
-                        {"label": "Disabled SSID (amber)", "variant": "warn"},
+                        {"label": "Disabled SSID (red)", "variant": "danger"},
                     ],
                 )
             ],
         },
-        {"label": "FortiAP Profiles", "blocks": [_table_block(parser.parse_fortiap_profiles(), "fg_ap_profiles", empty_text="No FortiAP profiles configured.", export_filename="fg_fortiap_profiles.csv")]},
-        {"label": "WIDS Profiles", "blocks": [_table_block(parser.parse_wids_profiles(), "fg_wids", empty_text="No WIDS profiles configured.", export_filename="fg_wids_profiles.csv")]},
-        {"label": "Managed FortiSwitches", "blocks": [_table_block(parser.parse_managed_switches(), "fg_switches", empty_text="No managed FortiSwitches configured.", export_filename="fg_managed_switches.csv")]},
-        {"label": "Port Policies", "blocks": [_table_block(parser.parse_switch_port_policies(), "fg_port_policies", empty_text="No port policies configured.")]},
-        {"label": "NAC Policies", "blocks": [_table_block(parser.parse_nac_policies(), "fg_nac", empty_text="No NAC policies configured.", export_filename="fg_nac_policies.csv")]},
+        {"label": "FortiAP Profiles", "count": len(ap_profs), "blocks": [_table_block(ap_profs, "fg_ap_profiles", empty_text="No FortiAP profiles configured.", export_filename="fg_fortiap_profiles.csv")]},
+        {"label": "WIDS Profiles", "count": len(wids), "blocks": [_table_block(wids, "fg_wids", empty_text="No WIDS profiles configured.", export_filename="fg_wids_profiles.csv")]},
+        {"label": "Managed FortiSwitches", "count": len(switches), "blocks": [_table_block(switches, "fg_switches", empty_text="No managed FortiSwitches configured.", export_filename="fg_managed_switches.csv")]},
+        {"label": "Port Policies", "count": len(port_pols), "blocks": [_table_block(port_pols, "fg_port_policies", empty_text="No port policies configured.")]},
+        {"label": "NAC Policies", "count": len(nac_pols), "blocks": [_table_block(nac_pols, "fg_nac", empty_text="No NAC policies configured.", export_filename="fg_nac_policies.csv")]},
     ]
     return {"section": "WiFi & Switch", "blocks": [{"type": "tabs", "id": "fg_wifi_tabs", "tabs": tabs}]}
 
@@ -1042,6 +1551,12 @@ def build_system(parser: Any) -> dict[str, Any]:
             "29": "Asia/Tokyo (UTC+9)",
         }
         tz_raw = str(s.get("timezone", ""))
+        thresh = str(s.get("admin_lockout_threshold", "-"))
+        dur = str(s.get("admin_lockout_duration", "60"))
+        lockout_display = "Disabled" if thresh == "0" else (f"{thresh} attempts / {dur}s" if thresh != "-" else "-")
+        pp = parser.parse_password_policy() if hasattr(parser, "parse_password_policy") else {"status": "disable"}
+        pp_enabled = str(pp.get("status", "disable")).lower() == "enable" or str(s.get("passwd_policy", "disable")).lower() == "enable"
+
         settings_blocks = [
             {
                 "type": "kv_grid",
@@ -1049,7 +1564,8 @@ def build_system(parser: Any) -> dict[str, Any]:
                     {"label": "Hostname", "value": s.get("hostname", "-")},
                     {"label": "Time Zone", "value": tz_map.get(tz_raw, f"TZ {tz_raw}")},
                     {"label": "VDOM Mode", "value": s.get("vdom_status", "disable")},
-                    {"label": "Admin Lockout Threshold", "value": s.get("admin_lockout_threshold", "-")},
+                    {"label": "Idle Timeout", "value": f"{s.get('idle_timeout', '5')} min"},
+                    {"label": "Admin Lockout Threshold", "value": lockout_display},
                 ],
             },
             {
@@ -1057,6 +1573,25 @@ def build_system(parser: Any) -> dict[str, Any]:
                 "rows": [
                     _toggle_row("FortiGuard Updates", s.get("fgd_alert_subscription", "disable")),
                     _toggle_row("Revision Backup on Upgrade", s.get("revision_backup_on_upgrade", "disable")),
+                ],
+            },
+            {"type": "section_header", "title": "Password Policy"},
+            {
+                "type": "kv_grid",
+                "items": [
+                    {"label": "Minimum Length", "value": str(pp.get("minimum_length", "-")) if pp_enabled else "Disabled"},
+                    {"label": "Apply To", "value": str(pp.get("apply_to", "-")) if pp_enabled else "—"},
+                    {"label": "Min Uppercase / Lowercase", "value": f"{pp.get('min_upper_case_letter', '0')} / {pp.get('min_lower_case_letter', '0')}" if pp_enabled else "—"},
+                    {"label": "Min Numbers / Special", "value": f"{pp.get('min_number', '0')} / {pp.get('min_non_alphanumeric', '0')}" if pp_enabled else "—"},
+                    {"label": "Expiry Days", "value": f"{pp.get('expire_day', '90')} days" if str(pp.get("expire_status", "disable")).lower() == "enable" else "Disabled"},
+                ],
+            },
+            {
+                "type": "card",
+                "rows": [
+                    _toggle_row("Admin Password Policy", "enable" if pp_enabled else "disable"),
+                    _toggle_row("Password Expiration", pp.get("expire_status", "disable")),
+                    _toggle_row("Allow Password Reuse", pp.get("reuse_password", "enable")),
                 ],
             },
         ]
@@ -1101,28 +1636,27 @@ def build_system(parser: Any) -> dict[str, Any]:
             _table_block(snmp.get("users", []), "fg_snmpv3_users", title="SNMPv3 Users", empty_text="No SNMPv3 users."),
         ]
 
+    certs = inspect_fortigate_certificates(parser)
     tabs = [
         {
             "label": "Administrators",
+            "count": len(admins or []),
             "blocks": [
                 _table_block(
                     admins,
                     "fg_admins",
                     empty_text="No administrators configured.",
                     row_class_fn=lambda r: "row-warn" if r.get("Profile") == "super_admin" else "",
-                    legend=[
-                        {"label": "super_admin Full Privilege (amber)", "variant": "warn"},
-                        {"label": "Scoped Admin Profile (default)", "variant": "default"},
-                    ],
+                    legend=ADMIN_LEGEND,
                     export_filename="fg_administrators.csv",
                 )
             ],
         },
-        {"label": "Admin Profiles", "blocks": prof_blocks},
+        {"label": "Admin Profiles", "count": len(profiles or []), "blocks": prof_blocks},
         {"label": "Settings", "blocks": settings_blocks},
         {"label": "HA", "blocks": ha_blocks},
         {"label": "SNMP", "blocks": snmp_blocks},
-        {"label": "Certificates", "blocks": build_cert_inspector_blocks(inspect_fortigate_certificates(parser), "fg")},
+        {"label": "Certificates", "count": len(certs), "blocks": build_cert_inspector_blocks(certs, "fg")},
     ]
     return {"section": "System", "blocks": [{"type": "tabs", "id": "fg_sys_tabs", "tabs": tabs}]}
 
@@ -1198,19 +1732,36 @@ def build_log_settings(parser: Any) -> dict[str, Any]:
     return {"section": "Log & Report", "blocks": [{"type": "tabs", "id": "fg_log_tabs", "tabs": tabs}]}
 
 
+def build_system_logs(parser: Any) -> dict[str, Any]:
+    sys_tabs = build_system(parser)["blocks"][0]["tabs"]
+    log_tabs = build_log_settings(parser)["blocks"][0]["tabs"]
+    return {"section": "System & Logs", "blocks": [{"type": "tabs", "id": "fg_sys_tabs", "tabs": [*sys_tabs, *log_tabs]}]}
+
+
 def build_fortigate_section(section: str, parser: Any, *, allow_probe: bool = False) -> dict[str, Any]:
     builders = {
+        "Overview": lambda: build_overview(parser, allow_probe=allow_probe),
+        "Security & Health": lambda: build_security_health(parser, allow_probe=allow_probe),
+        "Policies & NAT": lambda: build_policies_nat(parser),
+        "Objects": lambda: build_objects(parser),
+        "Interfaces & Network": lambda: build_interfaces_network(parser),
+        "Security Profiles": lambda: build_security(parser),
+        "VPN": lambda: build_vpn(parser),
+        "Users & Auth": lambda: build_user_auth(parser),
+        "WiFi & Switch": lambda: build_wifi(parser),
+        "System & Logs": lambda: build_system_logs(parser),
+        # Backward-compatible legacy section aliases
         "Summary": lambda: build_summary(parser, allow_probe=allow_probe),
         "Interfaces": lambda: build_interfaces(parser),
         "Network": lambda: build_network(parser),
         "Policy & Objects": lambda: build_policy_objects(parser),
         "Security": lambda: build_security(parser),
-        "VPN": lambda: build_vpn(parser),
         "User & Auth": lambda: build_user_auth(parser),
-        "WiFi & Switch": lambda: build_wifi(parser),
-        "System": lambda: build_system(parser),
+        "System": lambda: build_system_logs(parser),
         "Log & Report": lambda: build_log_settings(parser),
     }
     if section not in builders:
         raise KeyError(f"Unknown FortiGate section: {section}")
-    return builders[section]()
+    res = builders[section]()
+    res["section"] = section
+    return res

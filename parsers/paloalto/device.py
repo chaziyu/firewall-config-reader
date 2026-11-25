@@ -153,11 +153,13 @@ class PaloDeviceParser(PaloAltoParser):
         s = self._sys()
         if s is None:
             return {}
+        permitted = [e.get("name", "").strip() for e in s.findall("permitted-ip/entry") if e.get("name")]
         return {
             "IP Address":      s.findtext("ip-address", "-"),
             "Netmask":         s.findtext("netmask", "-"),
-            "Default Gateway": s.findtext("route/entry/nexthop/ip-address", "-") if s.find("route") else "-",
+            "Default Gateway": s.findtext("route/entry/nexthop/ip-address", "-") if s.find("route") is not None else "-",
             "Speed":           s.findtext("speed-duplex", "-"),
+            "Permitted IPs":   ", ".join(permitted) if permitted else "Any (Unrestricted)",
         }
 
     # ── HIGH AVAILABILITY ────────────────────────────────────────

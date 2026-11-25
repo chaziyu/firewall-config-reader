@@ -178,7 +178,7 @@
 
           const probeHint = document.createElement("span");
           probeHint.className = "fw-caption";
-          probeHint.textContent = "Sends a 5s TCP/TLS/SSH check from this machine to flagged public IP:port(s).";
+          probeHint.textContent = "Sends a 5s TCP/HTTP/TLS/SSH check from this machine to flagged public IP:port(s).";
           probeBar.appendChild(probeHint);
           card.appendChild(probeBar);
 
@@ -206,7 +206,11 @@
                 const heroBadge = document.getElementById(blk.probe_badge_id);
                 if (heroBadge && heroBadge.isConnected) {
                   heroBadge.replaceWith(
-                    badgeEl(`Public Mgmt Reachable (${data.open_count})`, "deny", blk.probe_badge_id)
+                    badgeEl(
+                      data.probe_badge_text || `Public Mgmt Reachable (${data.open_count})`,
+                      data.probe_badge_variant || "deny",
+                      blk.probe_badge_id
+                    )
                   );
                 }
               }
@@ -383,11 +387,14 @@
         return wrap;
       }
 
+      case "policy_simulator":
+        return renderPolicySimulator(blk);
+
       case "pa_policy_test":
-        return renderPaPolicyTest(blk);
+        return renderPolicySimulator({ ...blk, vendor: "pa" });
 
       case "fg_policy_lookup":
-        return renderFgPolicyLookup(blk);
+        return renderPolicySimulator({ ...blk, vendor: "fg" });
 
       case "route_lookup":
         return renderRouteLookup(blk);
@@ -442,71 +449,122 @@
     return { div, el: inp };
   }
 
-  function renderPaPolicyTest(blk) {
+  function renderPolicySimulator(blk) {
+    const isPa = blk.vendor === "pa";
     const det = document.createElement("details");
     det.className = "fw-expander";
     const sum = document.createElement("summary");
-    sum.textContent = "🔍 Test Policy Match";
+    sum.textContent =
+      blk.title || (isPa ? "🔍 Test Policy Match" : "🔍 Policy Lookup (Traffic Simulator)");
     det.appendChild(sum);
 
     const body = document.createElement("div");
     body.className = "fw-expander-body";
 
+    const intro = document.createElement("div");
+    intro.className = "fw-caption";
+    intro.style.marginBottom = "10px";
+    intro.textContent = isPa
+      ? "Evaluates PAN-OS rules top-to-bottom using AND logic across zones, interfaces, addresses, user, and service. Shows first match and any subsequent shadowed rules."
+      : "Simulates traffic and finds the first matching FortiGate policy (top-to-bottom). Blank or 'any' acts as a wildcard; shows any subsequent shadowed rules.";
+    body.appendChild(intro);
+
     const grid = document.createElement("div");
     grid.className = "fw-form-grid";
-    const srcZ = makeSelectField("Source Zone", blk.zones);
-    const dstZ = makeSelectField("Destination Zone", blk.zones);
-    const srcI = makeSelectField("Source Interface", blk.interfaces);
-    const dstI = makeSelectField("Destination Interface", blk.interfaces);
-    const srcIp = makeInputField("Source IP", "10.0.0.1", "");
-    const dstIp = makeInputField("Destination IP", "8.8.8.8", "");
-    const srcUser = makeInputField("Source User", "any", "any");
-    const dstPort = makeInputField("Dest Port", "443", "443");
-    const proto = makeSelectField("Protocol", ["tcp", "udp", "icmp", "any"]);
 
-    [srcZ, dstZ, srcI, dstI, srcIp, dstIp, srcUser, dstPort, proto].forEach((f) => grid.appendChild(f.div));
+    let fields;
+    let srcZ, dstZ, srcI, dstI, srcIp, dstIp, srcUser, dstPort, proto;
+
+    if (isPa) {
+      srcZ = makeSelectField("Source Zone", blk.zones || ["any"]);
+      dstZ = makeSelectField("Destination Zone", blk.zones || ["any"]);
+      srcI = makeSelectField("Source Interface", blk.interfaces || ["any"]);
+      dstI = makeSelectField("Destination Interface", blk.interfaces || ["any"]);
+      srcIp = makeInputField("Source IP", "10.0.0.1", "");
+      dstIp = makeInputField("Destination IP", "8.8.8.8", "");
+      srcUser = makeInputField("Source User", "any", "any");
+      dstPort = makeInputField("Dest Port", "443", "443");
+      proto = makeSelectField("Protocol", ["tcp", "udp", "icmp", "any"]);
+      fields = [srcZ, dstZ, srcI, dstI, srcIp, dstIp, srcUser, dstPort, proto];
+    } else {
+      srcI = makeSelectField("Source Interface", blk.interfaces || ["any"]);
+      dstI = makeSelectField("Destination Interface", blk.interfaces || ["any"]);
+      srcIp = makeInputField("Source IP / Object", "e.g. 10.10.1.5 or any", "");
+      dstIp = makeInputField("Destination IP / Object", "e.g. 8.8.8.8 or any", "");
+      proto = makeInputField("Protocol / Service", "e.g. HTTPS, tcp/443, any", "any");
+      const dlId = "fg_svc_datalist_" + Math.random().toString(36).slice(2, 8);
+      const dl = document.createElement("datalist");
+      dl.id = dlId;
+      for (const s of ["any", "HTTPS", "HTTP", "DNS", "SSH", "RDP", "ICMP", "TCP", "UDP", "tcp/443", "udp/53"]) {
+        const opt = document.createElement("option");
+        opt.value = s;
+        dl.appendChild(opt);
+      }
+      proto.el.setAttribute("list", dlId);
+      proto.div.appendChild(dl);
+      fields = [srcI, dstI, srcIp, dstIp, proto];
+    }
+
+    fields.forEach((f) => grid.appendChild(f.div));
     body.appendChild(grid);
 
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "fw-btn fw-btn-primary";
-    btn.textContent = "Trace Traffic Match";
+    btn.textContent = isPa ? "Trace Traffic Match" : "Run Policy Lookup";
     body.appendChild(btn);
 
     const resultBox = document.createElement("div");
     resultBox.style.marginTop = "12px";
     body.appendChild(resultBox);
 
-    btn.addEventListener("click", async () => {
+    const endpoint = isPa ? "/api/pa/policy-test" : "/api/fg/policy-lookup";
+
+    async function runSimulation() {
       resultBox.innerHTML = "";
-      if (!srcIp.el.value.trim() || !dstIp.el.value.trim()) {
-        resultBox.appendChild(renderBlock({ type: "alert", variant: "error", text: "Please enter both Source and Destination IP addresses." }));
+      if (isPa && (!srcIp.el.value.trim() || !dstIp.el.value.trim())) {
+        resultBox.appendChild(
+          renderBlock({ type: "alert", variant: "error", text: "Please enter both Source and Destination IP addresses." })
+        );
         return;
       }
       btn.disabled = true;
       try {
-        const res = await fetch("/api/pa/policy-test", {
+        const payload = isPa
+          ? {
+              policy_type: blk.policy_type || "security",
+              src_zone: srcZ.el.value,
+              dst_zone: dstZ.el.value,
+              src_interface: srcI.el.value,
+              dst_interface: dstI.el.value,
+              src_ip: srcIp.el.value.trim(),
+              dst_ip: dstIp.el.value.trim(),
+              src_user: srcUser.el.value.trim() || "any",
+              dst_port: dstPort.el.value.trim() || "443",
+              protocol: proto.el.value,
+            }
+          : {
+              src_iface: srcI.el.value,
+              dst_iface: dstI.el.value,
+              src_addr: srcIp.el.value.trim(),
+              dst_addr: dstIp.el.value.trim(),
+              protocol: proto.el.value.trim() || "any",
+            };
+        const res = await fetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            policy_type: blk.policy_type,
-            src_zone: srcZ.el.value,
-            dst_zone: dstZ.el.value,
-            src_interface: srcI.el.value,
-            dst_interface: dstI.el.value,
-            src_ip: srcIp.el.value.trim(),
-            dst_ip: dstIp.el.value.trim(),
-            src_user: srcUser.el.value.trim() || "any",
-            dst_port: dstPort.el.value.trim() || "443",
-            protocol: proto.el.value,
-          }),
+          body: JSON.stringify(payload),
         });
         const data = await res.json();
         if (!res.ok) {
-          resultBox.appendChild(renderBlock({ type: "alert", variant: "error", text: data.detail || "Match test failed." }));
+          resultBox.appendChild(renderBlock({ type: "alert", variant: "error", text: data.detail || "Lookup failed." }));
           return;
         }
-        if (data.matched) {
+        if (Array.isArray(data.blocks) && data.blocks.length) {
+          for (const b of data.blocks) {
+            resultBox.appendChild(renderBlock(b));
+          }
+        } else if (data.matched) {
           resultBox.appendChild(renderBlock({ type: "alert", variant: "success", text: `Traffic Matched: ${data.reason || ""}` }));
           if (data.table) resultBox.appendChild(renderBlock(data.table));
         } else {
@@ -517,85 +575,20 @@
       } finally {
         btn.disabled = false;
       }
+    }
+
+    btn.addEventListener("click", runSimulation);
+    [srcIp.el, dstIp.el, ...(dstPort ? [dstPort.el] : [])].forEach((inp) => {
+      inp.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          runSimulation();
+        }
+      });
     });
 
     det.appendChild(body);
     return det;
-  }
-
-  function renderFgPolicyLookup(blk) {
-    const card = document.createElement("div");
-    card.className = "fw-card";
-
-    const intro = document.createElement("div");
-    intro.className = "fw-caption";
-    intro.style.marginBottom = "12px";
-    intro.textContent =
-      "Simulates traffic and finds the first matching FortiGate policy (top-to-bottom). Blank or 'any' acts as a wildcard. All fields use AND logic; no match = implicit deny.";
-    card.appendChild(intro);
-
-    const grid = document.createElement("div");
-    grid.className = "fw-form-grid";
-    const srcI = makeSelectField("Source Interface", blk.interfaces || ["any"]);
-    const dstI = makeSelectField("Destination Interface", blk.interfaces || ["any"]);
-    const srcAddr = makeInputField("Source IP / Object", "e.g. 10.10.1.5 or any", "");
-    const dstAddr = makeInputField("Destination IP / Object", "e.g. 8.8.8.8 or any", "");
-    const proto = makeInputField("Protocol / Service", "e.g. HTTPS, tcp/443, any", "any");
-    const dlId = "fg_svc_datalist_" + Math.random().toString(36).slice(2, 8);
-    const dl = document.createElement("datalist");
-    dl.id = dlId;
-    for (const s of ["any", "HTTPS", "HTTP", "DNS", "SSH", "RDP", "ICMP", "TCP", "UDP", "tcp/443", "udp/53"]) {
-      const opt = document.createElement("option");
-      opt.value = s;
-      dl.appendChild(opt);
-    }
-    proto.el.setAttribute("list", dlId);
-    proto.div.appendChild(dl);
-
-    [srcI, dstI, srcAddr, dstAddr, proto].forEach((f) => grid.appendChild(f.div));
-    card.appendChild(grid);
-
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "fw-btn fw-btn-primary";
-    btn.textContent = "Run Policy Lookup";
-    card.appendChild(btn);
-
-    const resultBox = document.createElement("div");
-    resultBox.style.marginTop = "14px";
-    card.appendChild(resultBox);
-
-    btn.addEventListener("click", async () => {
-      resultBox.innerHTML = "";
-      btn.disabled = true;
-      try {
-        const res = await fetch("/api/fg/policy-lookup", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            src_iface: srcI.el.value,
-            dst_iface: dstI.el.value,
-            src_addr: srcAddr.el.value.trim(),
-            dst_addr: dstAddr.el.value.trim(),
-            protocol: proto.el.value.trim() || "any",
-          }),
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          resultBox.appendChild(renderBlock({ type: "alert", variant: "error", text: data.detail || "Lookup failed." }));
-          return;
-        }
-        for (const b of data.blocks || []) {
-          resultBox.appendChild(renderBlock(b));
-        }
-      } catch (err) {
-        resultBox.appendChild(renderBlock({ type: "alert", variant: "error", text: `Request failed: ${err.message}` }));
-      } finally {
-        btn.disabled = false;
-      }
-    });
-
-    return card;
   }
 
   function renderRouteLookup(blk) {
@@ -924,11 +917,33 @@
     }
     body.appendChild(grid);
 
+    const actionRow = document.createElement("div");
+    actionRow.style.display = "flex";
+    actionRow.style.alignItems = "center";
+    actionRow.style.gap = "14px";
+    actionRow.style.flexWrap = "wrap";
+
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "fw-btn fw-btn-primary";
     btn.textContent = "Trace Packet";
-    body.appendChild(btn);
+    actionRow.appendChild(btn);
+
+    const retLabel = document.createElement("label");
+    retLabel.style.display = "inline-flex";
+    retLabel.style.alignItems = "center";
+    retLabel.style.gap = "6px";
+    retLabel.style.fontSize = "12.5px";
+    retLabel.style.color = "var(--fw-muted)";
+    retLabel.style.cursor = "pointer";
+    const retChk = document.createElement("input");
+    retChk.type = "checkbox";
+    retChk.checked = true;
+    retLabel.appendChild(retChk);
+    retLabel.appendChild(document.createTextNode("Check Return Path (Asymmetric Routing / RPF)"));
+    actionRow.appendChild(retLabel);
+
+    body.appendChild(actionRow);
 
     const resultBox = document.createElement("div");
     resultBox.style.marginTop = "12px";
@@ -951,6 +966,7 @@
           dst_ip: dVal,
           dst_port: dstPort.el.value.trim() || "443",
           protocol: proto.el.value,
+          check_return: retChk.checked,
         };
         if (vrSel) payload.virtual_router = vrSel.el.value;
         const res = await fetch(endpoint, {
@@ -1026,9 +1042,12 @@
           return;
         }
         contentEl.innerHTML = "";
+        const sectionWrap = document.createElement("div");
+        sectionWrap.className = "fw-section-enter";
         for (const blk of data.blocks || []) {
-          contentEl.appendChild(renderBlock(blk));
+          sectionWrap.appendChild(renderBlock(blk));
         }
+        contentEl.appendChild(sectionWrap);
       } catch (err) {
         contentEl.innerHTML = "";
         contentEl.appendChild(renderBlock({ type: "alert", variant: "error", text: `Error loading section: ${err.message}` }));
@@ -1142,5 +1161,86 @@
 
     const first = navButtons[0].dataset.section;
     if (first) loadSection(first);
+
+    // ── Global Ctrl+K Quick Search Modal ────────────────────────
+    const qsModal = document.getElementById("fw-qs-modal");
+    const qsBtn = document.getElementById("fw-quicksearch-btn");
+    const qsClose = document.getElementById("fw-qs-close");
+    const qsForm = document.getElementById("fw-qs-form");
+    const qsInput = document.getElementById("fw-qs-input");
+    const qsSubmit = document.getElementById("fw-qs-submit");
+    const qsResults = document.getElementById("fw-qs-results");
+
+    if (qsModal && qsForm && qsInput && qsResults) {
+      const qsEndpoint = vendor === "Palo Alto" ? "/api/pa/where-used" : "/api/fg/where-used";
+
+      function openQuickSearch() {
+        qsModal.style.display = "flex";
+        setTimeout(() => {
+          qsInput.focus();
+          qsInput.select();
+        }, 10);
+      }
+
+      function closeQuickSearch() {
+        qsModal.style.display = "none";
+      }
+
+      if (qsBtn) qsBtn.addEventListener("click", openQuickSearch);
+      if (qsClose) qsClose.addEventListener("click", closeQuickSearch);
+      qsModal.addEventListener("click", (e) => {
+        if (e.target === qsModal) closeQuickSearch();
+      });
+
+      document.addEventListener("keydown", (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+          e.preventDefault();
+          if (qsModal.style.display === "none") {
+            openQuickSearch();
+          } else {
+            closeQuickSearch();
+          }
+        } else if (e.key === "Escape" && qsModal.style.display !== "none") {
+          e.preventDefault();
+          closeQuickSearch();
+        }
+      });
+
+      qsForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const qVal = qsInput.value.trim();
+        qsResults.innerHTML = "";
+        if (!qVal) {
+          qsResults.appendChild(
+            renderBlock({ type: "alert", variant: "error", text: "Please enter an IP address, CIDR subnet, or object name." })
+          );
+          return;
+        }
+        if (qsSubmit) qsSubmit.disabled = true;
+        try {
+          const res = await fetch(qsEndpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ query: qVal }),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            qsResults.appendChild(
+              renderBlock({ type: "alert", variant: "error", text: data.detail || "Search failed." })
+            );
+            return;
+          }
+          for (const b of data.blocks || []) {
+            qsResults.appendChild(renderBlock(b));
+          }
+        } catch (err) {
+          qsResults.appendChild(
+            renderBlock({ type: "alert", variant: "error", text: `Request failed: ${err.message}` })
+          );
+        } finally {
+          if (qsSubmit) qsSubmit.disabled = false;
+        }
+      });
+    }
   });
 })();

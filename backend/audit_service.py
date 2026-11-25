@@ -168,6 +168,25 @@ def run_fortigate_audit(parser: Any) -> dict[str, Any]:
 
     unused_addrs = _collect_unused_fg_addresses(parser)
 
+    # Admin hardening: Trusted Hosts, 2FA, Password Policy, Lockout
+    admins = (parser.parse_admins() if hasattr(parser, "parse_admins") else []) or []
+    no_trusthost = [str(a.get("Name", "-")) for a in admins if str(a.get("Trusted Hosts", "Any")).strip().lower() == "any"]
+    super_no_2fa = [
+        str(a.get("Name", "-"))
+        for a in admins
+        if str(a.get("Profile", "")).strip() == "super_admin" and str(a.get("2FA", "Disable")).strip().lower() == "disable"
+    ]
+    sys_set = (parser.parse_system_settings() if hasattr(parser, "parse_system_settings") else {}) or {}
+    pp_cfg = (parser.parse_password_policy() if hasattr(parser, "parse_password_policy") else {}) or {}
+    pp_on = str(pp_cfg.get("status", "disable")).lower() == "enable" or str(sys_set.get("passwd_policy", "disable")).lower() == "enable"
+    lock_thresh = str(sys_set.get("admin_lockout_threshold", "3")).strip()
+    lock_dur = str(sys_set.get("admin_lockout_duration", "60")).strip()
+    lockout_weak = False
+    try:
+        lockout_weak = bool(sys_set) and (int(lock_thresh) == 0 or int(lock_thresh) > 10 or int(lock_dur) == 0)
+    except ValueError:
+        lockout_weak = False
+
     if any_any:
         findings.append(
             {
@@ -202,6 +221,42 @@ def run_fortigate_audit(parser: Any) -> dict[str, Any]:
                 "Category": "Legacy VPN IKEv1 or Weak DH Group (1/2/5)",
                 "Count": len(weak_vpn_med),
                 "Details": _preview_names(weak_vpn_med),
+            }
+        )
+    if no_trusthost:
+        findings.append(
+            {
+                "Severity": "Medium",
+                "Category": "Admin Accounts Without Trusted Hosts",
+                "Count": len(no_trusthost),
+                "Details": _preview_names(no_trusthost),
+            }
+        )
+    if super_no_2fa:
+        findings.append(
+            {
+                "Severity": "Medium",
+                "Category": "Super-Admin Accounts Without 2FA",
+                "Count": len(super_no_2fa),
+                "Details": _preview_names(super_no_2fa),
+            }
+        )
+    if admins and not pp_on:
+        findings.append(
+            {
+                "Severity": "Medium",
+                "Category": "Admin Password Policy Disabled",
+                "Count": 1,
+                "Details": "config system password-policy is disabled (no minimum complexity enforced).",
+            }
+        )
+    if lockout_weak:
+        findings.append(
+            {
+                "Severity": "Medium",
+                "Category": "Admin Login Lockout Disabled or Weak",
+                "Count": 1,
+                "Details": f"admin-lockout-threshold={lock_thresh}, admin-lockout-duration={lock_dur}s",
             }
         )
     if unlogged:
@@ -293,6 +348,39 @@ def run_paloalto_audit(parsers: dict[str, Any]) -> dict[str, Any]:
 
     unused_addrs = _collect_unused_pa_addresses(pol, obj)
 
+    # Admin hardening: MGT Permitted IPs, Password Complexity, Lockout, Local Superuser Auth Profile
+    dev = parsers.get("Device")
+    mgt_unrestricted = False
+    pwd_comp_disabled = False
+    lockout_missing = False
+    super_local_no_auth: list[str] = []
+
+    if dev is not None:
+        mgt = (dev.get_mgmt_interface() if hasattr(dev, "get_mgmt_interface") else {}) or {}
+        mgt_ip = str(mgt.get("IP Address", "-") or "-").strip()
+        perm = str(mgt.get("Permitted IPs", "") or "").strip()
+        if mgt_ip not in ("-", "", "Unknown") and perm == "Any (Unrestricted)":
+            mgt_unrestricted = True
+
+        pc = (dev.get_password_complexity() if hasattr(dev, "get_password_complexity") else {}) or {}
+        if pc and str(pc.get("Enabled", "")).strip().lower() not in ("✓", "yes", "true", "enable", "1"):
+            pwd_comp_disabled = True
+
+        auth_set = (dev.get_auth_settings() if hasattr(dev, "get_auth_settings") else {}) or {}
+        pwd_profs = (dev.get_password_profiles() if hasattr(dev, "get_password_profiles") else []) or []
+        global_fa = str(auth_set.get("Failed Attempts", "-") or "-").strip()
+        prof_has_lockout = any(str(p.get("Failed Attempts", "-") or "-").strip() not in ("-", "", "0") for p in pwd_profs)
+        if auth_set and global_fa in ("-", "", "0") and not prof_has_lockout:
+            lockout_missing = True
+
+        admins = (dev.get_admins() if hasattr(dev, "get_admins") else []) or []
+        super_local_no_auth = [
+            str(a.get("Name", "-"))
+            for a in admins
+            if str(a.get("Role", "")).strip().lower() == "superuser"
+            and str(a.get("Auth Profile", "-") or "-").strip() == "-"
+        ]
+
     if any_any:
         findings.append(
             {
@@ -327,6 +415,42 @@ def run_paloalto_audit(parsers: dict[str, Any]) -> dict[str, Any]:
                 "Category": "Legacy VPN IKEv1 or Weak DH Group (1/2/5)",
                 "Count": len(weak_vpn_med),
                 "Details": _preview_names(weak_vpn_med),
+            }
+        )
+    if mgt_unrestricted:
+        findings.append(
+            {
+                "Severity": "Medium",
+                "Category": "Management Interface Unrestricted (Permitted IPs: Any)",
+                "Count": 1,
+                "Details": "MGT interface has no <permitted-ip> restriction configured.",
+            }
+        )
+    if pwd_comp_disabled:
+        findings.append(
+            {
+                "Severity": "Medium",
+                "Category": "Admin Password Complexity Disabled",
+                "Count": 1,
+                "Details": "deviceconfig system password-complexity is not enabled.",
+            }
+        )
+    if lockout_missing:
+        findings.append(
+            {
+                "Severity": "Info",
+                "Category": "Admin Login Lockout Not Configured",
+                "Count": 1,
+                "Details": "No failed-attempts lockout threshold configured in system auth or password profiles.",
+            }
+        )
+    if super_local_no_auth:
+        findings.append(
+            {
+                "Severity": "Info",
+                "Category": "Local Superuser Without External Auth Profile",
+                "Count": len(super_local_no_auth),
+                "Details": _preview_names(super_local_no_auth),
             }
         )
     if disabled_rules:

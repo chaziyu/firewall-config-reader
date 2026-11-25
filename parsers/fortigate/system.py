@@ -14,9 +14,9 @@ class SystemParserMixin:
                 m = re.search(p, body)
                 return m.group(1).strip() if m else d
             trusted_hosts = []
-            for i in range(1, 7):
-                h = g(rf'set trusthost{i} ([\d\./]+)')
-                if h != "-" and not h.startswith("0.0.0.0"):
+            for i in range(1, 11):
+                h = g(rf'set trusthost{i}\s+([^\r\n]+)')
+                if h != "-" and not h.startswith("0.0.0.0") and not h.startswith("::/0"):
                     trusted_hosts.append(h)
             rows.append({
                 "Name":          name,
@@ -100,9 +100,33 @@ class SystemParserMixin:
             "forticloud_sso": g(r'set forticloud-account-enforcement (enable|disable)', "disable"),
             "passwd_policy":  passwd_policy,
             "passwd_scope":   passwd_scope,
+            "admin_lockout_threshold": g(r'set admin-lockout-threshold (\d+)', "3"),
+            "admin_lockout_duration":  g(r'set admin-lockout-duration (\d+)', "60"),
             "workflow_mode":  g(r'set management-mode (\S+)', "automatic"),
             "ntp":            ntp,
             "switch_ctrl":    g(r'set switch-controller (enable|disable)', "disable"),
+        }
+
+    def parse_password_policy(self) -> dict:
+        block = self._extract_block("system password-policy")
+        if not block:
+            return {"status": "disable"}
+
+        def g(p, d="-"):
+            m = re.search(p, block)
+            return m.group(1).strip() if m else d
+
+        return {
+            "status": g(r'set status (enable|disable)', "disable"),
+            "apply_to": g(r'set apply-to ([^\r\n]+)', "admin-password"),
+            "minimum_length": g(r'set minimum-length (\d+)', "8"),
+            "min_upper_case_letter": g(r'set min-upper-case-letter (\d+)', "0"),
+            "min_lower_case_letter": g(r'set min-lower-case-letter (\d+)', "0"),
+            "min_number": g(r'set min-number (\d+)', "0"),
+            "min_non_alphanumeric": g(r'set min-non-alphanumeric (\d+)', "0"),
+            "expire_status": g(r'set expire-status (enable|disable)', "disable"),
+            "expire_day": g(r'set expire-day (\d+)', "90"),
+            "reuse_password": g(r'set reuse-password (enable|disable)', "enable"),
         }
 
     def parse_snmp(self) -> dict:

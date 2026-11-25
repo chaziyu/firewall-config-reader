@@ -30,7 +30,7 @@ _HIGH_RISK_VIP_PORTS: dict[int, str] = {
     5900: "VNC",
     8080: "HTTP-Alt",
 }
-_CRITICAL_VIP_PORTS = {22, 23, 80, 445, 1433, 3306, 3389, 5432, 5900}
+_CRITICAL_VIP_PORTS = {22, 23, 445, 1433, 3306, 3389, 5432, 5900}
 _CGNAT_NET = ipaddress.IPv4Network("100.64.0.0/10")
 _TREE_PREFIX_RE = re.compile(r"^[\s\u00a0]*(?:\u2517|\u2514)?[\s\u00a0]*")
 
@@ -227,6 +227,7 @@ def find_fortigate_public_mgmt_exposure(parser: Any) -> list[dict[str, Any]]:
 
             findings.append(
                 {
+                    "category": "mgmt",
                     "interface": iface_name,
                     "ip": ", ".join(public_ips),
                     "protocols": protocols,
@@ -252,6 +253,7 @@ def find_fortigate_public_mgmt_exposure(parser: Any) -> list[dict[str, Any]]:
                 targets = []
             findings.append(
                 {
+                    "category": "nat_mgmt",
                     "interface": iface_name,
                     "ip": ip_field,
                     "protocols": protocols,
@@ -310,11 +312,12 @@ def find_fortigate_public_mgmt_exposure(parser: Any) -> list[dict[str, Any]]:
             pol_ids = ", ".join(f"#{p.get('ID', '?')}" for p in matching_pols)
             findings.append(
                 {
+                    "category": "vip",
                     "interface": f"VIP: {vip_name} ({vip_intf})",
                     "ip": ext_ip,
                     "protocols": [proto_label],
                     "display_protocols": [f"{proto_label} ({vip_port}) → {mapped_to}"],
-                    "note": f"Public DNAT via Policy {pol_ids} · Source: {'all (Unrestricted)' if any_src_all else 'Restricted'}",
+                    "note": f"Public DNAT to internal server via Policy {pol_ids} · Source: {'all (Unrestricted)' if any_src_all else 'Restricted'}",
                     "restricted": not any_src_all,
                     "severity": severity,
                     "targets": [{"ip": ext_ip, "port": vip_port, "protocol": proto_label}],
@@ -385,6 +388,7 @@ def _pa_mgt_exposure(
 
     return [
         {
+            "category": "mgmt",
             "interface": "Management (MGT)",
             "ip": ", ".join(mgt_ips),
             "protocols": enabled_protos,
@@ -471,6 +475,7 @@ def find_paloalto_public_mgmt_exposure(
             severity = "critical" if ("HTTP" in protos or not restricted) else "warn"
             findings.append(
                 {
+                    "category": "mgmt",
                     "interface": iface_name,
                     "ip": ", ".join(public_ips),
                     "protocols": protos,
@@ -508,6 +513,7 @@ def find_paloalto_public_mgmt_exposure(
                 severity = "critical" if ("HTTP" in protos or not restricted) else "warn"
                 findings.append(
                     {
+                        "category": "mgmt",
                         "interface": uname,
                         "ip": ", ".join(public_ips),
                         "protocols": protos,
@@ -532,24 +538,55 @@ def build_exposure_overview_blocks(
         return ({"text": "No Public Mgmt Exposure", "variant": "allow"}, None)
 
     crit_count = sum(1 for f in findings if f.get("severity") == "critical")
+    has_mgmt = any(f.get("category", "mgmt") in ("mgmt", "nat_mgmt") for f in findings)
+    has_vip = any(f.get("category") == "vip" for f in findings)
     severity = "deny" if crit_count > 0 else "warn"
+
+    if has_mgmt:
+        badge_text = f"Public Mgmt Exposed ({len(findings)})"
+        card_title = "Public Interface Management Exposure"
+        if has_vip:
+            card_subtitle = (
+                "Active firewall management interfaces and public VIP (DNAT) port-forwards. "
+                "VIP entries forward to internal servers (not the firewall GUI). "
+                "Critical = unrestricted mgmt, plaintext HTTP mgmt, or unrestricted RDP/SSH/SMB/DB VIP; "
+                "Warning = restricted, WAN behind NAT, or HTTP/FTP VIP."
+            )
+        else:
+            card_subtitle = (
+                "Active interfaces with a public IP and HTTP, HTTPS, or SSH admin access enabled. "
+                "Critical = unrestricted or plaintext HTTP; "
+                "Warning = restricted via trusthost / local-in-policy / permitted-ip or WAN behind NAT."
+            )
+        card_badge_text = (
+            f"{crit_count} Critical · {len(findings)} Exposed"
+            if crit_count > 0
+            else f"{len(findings)} Exposed (Restricted)"
+        )
+    else:
+        badge_text = f"Public VIP Exposed ({len(findings)})"
+        card_title = "Public VIP / Port-Forward (DNAT) Exposure"
+        card_subtitle = (
+            "Public VIP (DNAT) rules forwarding WAN traffic to internal servers — "
+            "these do not expose the firewall login GUI. "
+            "Critical = unrestricted RDP/SSH/Telnet/SMB/DB/VNC; "
+            "Warning = plaintext HTTP/FTP web service or restricted source."
+        )
+        card_badge_text = (
+            f"{crit_count} Critical · {len(findings)} VIP(s)"
+            if crit_count > 0
+            else f"{len(findings)} Warning · {len(findings)} VIP(s)"
+        )
+
     badge = {
-        "text": f"Public Mgmt Exposed ({len(findings)})",
+        "text": badge_text,
         "variant": severity,
         "id": "fw_exposure_badge",
     }
-    card_badge_text = (
-        f"{crit_count} Critical · {len(findings)} Exposed"
-        if crit_count > 0
-        else f"{len(findings)} Exposed (Restricted)"
-    )
     card: dict[str, Any] = {
         "type": "card",
-        "title": "Public Interface Management Exposure",
-        "subtitle": (
-            "Active interfaces / public VIPs exposing management or high-risk ports (HTTP, HTTPS, SSH, RDP, etc.). "
-            "Critical = unrestricted public IP or plaintext HTTP/RDP; Warning = restricted or WAN behind NAT."
-        ),
+        "title": card_title,
+        "subtitle": card_subtitle,
         "badge": {"text": card_badge_text, "variant": severity},
         "rows": [
             {
@@ -598,8 +635,68 @@ def _read_tls_version(conn: Any, ip: str, timeout: float) -> str | None:
         return None
 
 
-def _probe_one(task: tuple[str, str, int, str, str, bool], timeout: float) -> dict[str, Any]:
-    iface, ip, port, proto, cfg_sev, restricted = task
+def _read_http_hint(conn: Any, ip: str, timeout: float) -> str | None:
+    if not (hasattr(conn, "sendall") and hasattr(conn, "recv")):
+        return None
+    try:
+        if hasattr(conn, "settimeout"):
+            conn.settimeout(min(2.0, timeout))
+        req = (
+            f"GET / HTTP/1.0\r\nHost: {ip}\r\n"
+            "User-Agent: FirewallConfigReader/1.0\r\nConnection: close\r\n\r\n"
+        ).encode("ascii", errors="ignore")
+        conn.sendall(req)
+        chunks: list[bytes] = []
+        total = 0
+        while total < 4096:
+            chunk = conn.recv(2048)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if b"</title>" in b"".join(chunks).lower():
+                break
+        raw = b"".join(chunks)
+        if not raw:
+            return None
+        text = raw.decode("utf-8", errors="ignore")
+        head, _, body = text.partition("\r\n\r\n")
+        if not body and "\n\n" in text:
+            head, _, body = text.partition("\n\n")
+        lines = head.splitlines()
+        if not lines or not lines[0].upper().startswith("HTTP/"):
+            return None
+        status_parts = lines[0].split(None, 2)
+        status_code = status_parts[1] if len(status_parts) >= 2 else ""
+        headers: dict[str, str] = {}
+        for line in lines[1:]:
+            if ":" in line:
+                k, v = line.split(":", 1)
+                headers[k.strip().lower()] = v.strip()
+        server = "".join(ch for ch in headers.get("server", "") if 32 <= ord(ch) <= 126).strip()[:40]
+        location = "".join(ch for ch in headers.get("location", "") if 32 <= ord(ch) <= 126).strip()[:60]
+        title_m = re.search(r"<title[^>]*>(.*?)</title>", body, re.IGNORECASE | re.DOTALL)
+        title = ""
+        if title_m:
+            raw_title = re.sub(r"\s+", " ", title_m.group(1)).strip()
+            title = "".join(ch for ch in raw_title if 32 <= ord(ch) <= 126).strip()[:48]
+
+        parts: list[str] = []
+        if status_code:
+            parts.append(f"HTTP {status_code}")
+        if location and status_code.startswith("3"):
+            parts.append(f"→ {location}")
+        if server:
+            parts.append(f"Server: {server}")
+        if title:
+            parts.append(f'Title: "{title}"')
+        return " · ".join(parts) if parts else None
+    except Exception:
+        return None
+
+
+def _probe_one(task: tuple[str, str, int, str, str, bool, str], timeout: float) -> dict[str, Any]:
+    iface, ip, port, proto, cfg_sev, restricted, category = task
     try:
         conn = socket.create_connection((ip, port), timeout=timeout)
         status = "open"
@@ -613,6 +710,10 @@ def _probe_one(task: tuple[str, str, int, str, str, bool], timeout: float) -> di
                 tls_ver = _read_tls_version(conn, ip, timeout)
                 if tls_ver:
                     detail = f"TCP Open — {tls_ver} Handshake OK"
+            elif proto in ("HTTP", "HTTP-Alt"):
+                http_hint = _read_http_hint(conn, ip, timeout)
+                if http_hint:
+                    detail = f"TCP Open — {http_hint}"
         finally:
             try:
                 conn.close()
@@ -633,6 +734,7 @@ def _probe_one(task: tuple[str, str, int, str, str, bool], timeout: float) -> di
         sev_label = "Warning"
 
     return {
+        "category": category,
         "interface": iface,
         "ip": ip,
         "port": port,
@@ -645,12 +747,13 @@ def _probe_one(task: tuple[str, str, int, str, str, bool], timeout: float) -> di
 
 def probe_exposure_targets(findings: list[dict[str, Any]], timeout: float = 5.0) -> list[dict[str, Any]]:
     """Perform TCP connect probes strictly against targets derived from exposure findings."""
-    tasks: list[tuple[str, str, int, str, str, bool]] = []
+    tasks: list[tuple[str, str, int, str, str, bool, str]] = []
     seen: set[tuple[str, str, int]] = set()
     for f in findings:
         iface = str(f.get("interface", "-"))
         cfg_sev = str(f.get("severity", "warn"))
         restricted = bool(f.get("restricted", False))
+        category = str(f.get("category", "mgmt"))
         for t in f.get("targets") or []:
             ip = _bare_ip(str(t.get("ip", "")))
             port = int(t.get("port", 0) or 0)
@@ -661,7 +764,7 @@ def probe_exposure_targets(findings: list[dict[str, Any]], timeout: float = 5.0)
             if key in seen:
                 continue
             seen.add(key)
-            tasks.append((iface, ip, port, proto, cfg_sev, restricted))
+            tasks.append((iface, ip, port, proto, cfg_sev, restricted, category))
 
     if not tasks:
         return []
@@ -675,24 +778,51 @@ def build_exposure_probe_blocks(probe_results: list[dict[str, Any]]) -> dict[str
         return {
             "open_count": 0,
             "total": 0,
-            "blocks": [{"type": "alert", "variant": "info", "text": "No public management IP/port targets to test."}],
+            "blocks": [{"type": "alert", "variant": "info", "text": "No public management or VIP IP/port targets to test."}],
         }
 
-    open_count = sum(1 for r in probe_results if r["status"] == "open")
+    open_results = [r for r in probe_results if r["status"] == "open"]
+    open_count = len(open_results)
     total = len(probe_results)
+    has_mgmt = any(r.get("category", "mgmt") in ("mgmt", "nat_mgmt") for r in probe_results)
+    open_mgmt = any(r.get("category", "mgmt") in ("mgmt", "nat_mgmt") for r in open_results)
+    open_crit_vip = any(r.get("category") == "vip" and r.get("config_severity") == "Critical" for r in open_results)
+
+    probe_badge_text: str | None = None
+    probe_badge_variant: str | None = None
 
     if open_count > 0:
-        alert = {
-            "type": "alert",
-            "variant": "error",
-            "text": f"CONFIRMED CRITICAL: {open_count} of {total} public management port(s) accepted a TCP connection from this host!",
-        }
+        if open_mgmt:
+            alert_variant = "error"
+            alert_text = (
+                f"CONFIRMED CRITICAL: {open_count} of {total} public management port(s) accepted a TCP connection from this host!"
+            )
+            probe_badge_text = f"Public Mgmt Reachable ({open_count})"
+            probe_badge_variant = "deny"
+        elif open_crit_vip:
+            alert_variant = "error"
+            alert_text = (
+                f"CONFIRMED CRITICAL: {open_count} of {total} public VIP port-forward(s) (internal server) "
+                "accepted a TCP connection from this host!"
+            )
+            probe_badge_text = f"Public VIP Reachable ({open_count})"
+            probe_badge_variant = "deny"
+        else:
+            alert_variant = "warn"
+            alert_text = (
+                f"REACHABLE (WARNING): {open_count} of {total} public VIP port-forward(s) "
+                "(internal server, not firewall GUI) accepted a TCP connection from this host."
+            )
+            probe_badge_text = f"Public VIP Reachable ({open_count})"
+            probe_badge_variant = "warn"
+        alert = {"type": "alert", "variant": alert_variant, "text": alert_text}
     else:
+        target_label = "management/VIP" if has_mgmt else "VIP"
         alert = {
             "type": "alert",
             "variant": "info",
             "text": (
-                f"0 of {total} tested port(s) accepted a TCP connection from this host. "
+                f"0 of {total} tested {target_label} port(s) accepted a TCP connection from this host. "
                 "Note: ports may still be reachable from other networks or blocked by your local firewall — keep config restrictions in place."
             ),
         }
@@ -712,7 +842,7 @@ def build_exposure_probe_blocks(probe_results: list[dict[str, Any]]) -> dict[str
         for r in probe_results
     ]
 
-    return {
+    res: dict[str, Any] = {
         "open_count": open_count,
         "total": total,
         "blocks": [
@@ -732,3 +862,7 @@ def build_exposure_probe_blocks(probe_results: list[dict[str, Any]]) -> dict[str
             },
         ],
     }
+    if probe_badge_text and probe_badge_variant:
+        res["probe_badge_text"] = probe_badge_text
+        res["probe_badge_variant"] = probe_badge_variant
+    return res
